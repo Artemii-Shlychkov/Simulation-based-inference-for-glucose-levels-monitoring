@@ -1,0 +1,93 @@
+patient_name: "adolescent#001"
+sensor_name: "Dexcom"
+pump_name: "Insulet"
+scenario: 
+      - - 7
+        - 45
+      - - 12
+        - 70
+      - - 16
+        - 15
+      - - 18
+        - 80
+      - - 23
+        - 10
+
+sbi_setting:
+  algorithm: TSNPE
+  num_simulations: 1000
+  num_rounds: 5
+  n_samples_from_posterior: 1000
+
+num_params: 10
+param_priors:
+  kmax:
+    - 0.01
+    - 0.1
+  kmin:
+    - 0.0
+    - 0.05
+  b:
+    - 0.5
+    - 1.0
+  d:
+    - 0.05
+    - 0.5
+  kabs:
+    - 0.01
+    - 1.5
+  kp1:
+    - 3.0
+    - 12.0
+  kp2:
+    - 0.0
+    - 0.05
+  kp3:
+    - 0.0
+    - 0.05
+  k1:
+    - 0.01
+    - 0.2
+  k2:
+    - 0.01
+    - 0.5
+  Vm0:
+    - 1.0
+    - 15.0
+  Vmx:
+    - 0.01
+    - 0.2
+  ka1:
+    - 0.001
+    - 0.01
+  ka2:
+    - 0.01
+    - 0.05
+  m1:
+    - 0.1
+    - 0.5
+  m2:
+    - 0.1
+    - 0.5
+  m30:
+    - 0.1
+    - 1.0
+  m4:
+    - 0.05
+    - 0.2
+  ki:
+    - 0.0
+    - 0.05
+  p2u:
+    - 0.01
+    - 0.1
+  Ib:
+    - 80.0
+    - 140.0
+  kd:
+    - 0.01
+    - 0.03
+  ksc:
+    - 0.05
+    - 0.2
+

@@ -1,0 +1,4 @@
+/results/*
+/archive/*
+*.log
+/sbi-logs/*
