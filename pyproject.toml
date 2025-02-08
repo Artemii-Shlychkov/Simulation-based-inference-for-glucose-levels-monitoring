@@ -21,4 +21,9 @@ ignore = [
     "E501",  # Line length. We have ruff-format (ruff-format seems not to work on # comments) @NilsIseke did not find an autofix for this, therefore ignoring.
     "FA102", # We assume to use Python versions >= 3.10
     "S301", # We only load stuff that we wrap ourselves
+    "PLR0913", # We just need many args...
 ]
+[tool.mypy]
+[[tool.mypy.overrides]]
+module = ["sbi.*", "simglucose.*", "pathos.*","sklearn.*"]
+ignore_missing_imports = true

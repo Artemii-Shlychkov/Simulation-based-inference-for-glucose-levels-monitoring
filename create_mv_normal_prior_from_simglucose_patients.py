@@ -5,7 +5,8 @@ from pathlib import Path
 import numpy as np
 import torch
 from simglucose.patient.t1dpatient import T1DPatient
-from torch.distributions.multivariate_normal import MultivariateNormal
+from torch.distributions import MultivariateNormal, TransformedDistribution
+from torch.distributions.transforms import ExpTransform
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 patient = T1DPatient.withName("adolescent#001")
@@ -19,6 +20,13 @@ for i in ixd:
     patient = T1DPatient.withName(f"adolescent#0{i}")
     for key, value in patient._params.to_dict().items():
         param_dict[key].append(value)
+    patient = T1DPatient.withName(f"adult#0{i}")
+    for key, value in patient._params.to_dict().items():
+        param_dict[key].append(value)
+    patient = T1DPatient.withName(f"child#0{i}")
+    for key, value in patient._params.to_dict().items():
+        param_dict[key].append(value)
+
 
 for key in [
     "Name",
@@ -53,8 +61,14 @@ cov = cov + np.eye(cov.shape[0]) * 1e-4
 
 mean = torch.tensor(mean, dtype=torch.float32, device=device)
 cov = torch.tensor(cov, dtype=torch.float32, device=device)
+
+
 # create multivariate normal
 mvn = MultivariateNormal(loc=mean, covariance_matrix=cov)
+
+pos_mvn = TransformedDistribution(mvn, ExpTransform())
+with Path("pos_mvn_prior.pkl").open("wb") as f:
+    pickle.dump(pos_mvn, f)
 
 print("Constructed multivariate normal prior with Cov matrix of shape:", cov.shape)
 with Path("mvn_prior.pkl").open("wb") as f:
@@ -70,4 +84,3 @@ def create_uniform_prior(param_dict):
 
 
 param_dict = create_uniform_prior(param_dict)
-print(param_dict)

@@ -1,0 +1,29 @@
+patient_name: "adolescent#001"
+sensor_name: "Dexcom"
+pump_name: "Insulet"
+scenario: 
+      - - 7
+        - 45
+      - - 12
+        - 70
+      - - 16
+        - 15
+      - - 18
+        - 80
+      - - 23
+        - 10
+hours: 24
+priors_data_file: "all_patients_priors.json"
+inflation_factor: 1.1
+mean_shift: 0.2
+
+sbi_setting:
+  algorithm: TSNPE
+  sampling_method: 'sir'
+  num_simulations: 10
+  num_rounds: 1
+  n_samples_from_posterior: 10
+
+num_params: 45
+
+
