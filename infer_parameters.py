@@ -734,7 +734,7 @@ if __name__ == "__main__":
     device = set_up_device()
     pathos = set_up_pathos()
 
-    sbi_settings: dict = config["sbi_setting"]
+    sbi_settings: dict = config["sbi_settings"]
 
     selected_params = select_random_parameters(
         param_priors=config["param_priors"], num_params=config["num_params"]

@@ -20,6 +20,8 @@ from pathos.multiprocessing import ProcessingPool as Pool
 from sbi.inference import NPE, DirectPosterior
 from sbi.utils import RestrictedPrior, get_density_thresholder
 from sbi.utils.user_input_checks import (
+    check_sbi_inputs,
+    process_prior,
     process_simulator,
 )
 from simglucose.actuator.pump import InsulinPump
@@ -35,8 +37,6 @@ from tqdm import tqdm
 
 from glucose_sbi.sample_non_negative import sample_non_negative
 from prepare_priors import Prior, prepare_prior
-
-pathos = True
 
 
 @dataclass
@@ -186,14 +186,20 @@ def set_custom_params(patient: T1DPatient, theta: torch.Tensor, priors: Prior) -
 
     """
     # convert tensor to list
-    custom_params_values = theta.tolist()
+    # print("theta shape", theta.shape)
+    # copy theta
+    theta_copy = deepcopy(theta)
+
+    custom_params_values = theta_copy.tolist()
+    # print(custom_params_values)
     param_names = priors.params_names
+    # print("param_names", param_names)
     for i, param in enumerate(param_names):
         setattr(patient._params, param, custom_params_values[i])  # noqa: SLF001
 
 
 def create_simulation_envs_with_custom_params(
-    params_sets: torch.Tensor,
+    theta: torch.Tensor,
     default_settings: DeafultSimulationEnv,
     priors: Prior,
     hours: int = 24,
@@ -222,15 +228,20 @@ def create_simulation_envs_with_custom_params(
     )
     simulation_envs = []
     sim_patients_params = []
-    for i in range(params_sets.shape[0]):
+    # print("params_sets", params_sets.shape)
+    # print("theta shape 0", theta.shape[0])
+    for i, theta_i in enumerate(theta):
+        # print("i", i)
+        # print(f"theta[{i}]", theta_i)
         custom_sim_env = deepcopy(default_simulation_env)
         # row i is shape (23,)
-        set_custom_params(custom_sim_env.env.patient, params_sets[i], priors)
+        set_custom_params(custom_sim_env.env.patient, theta_i, priors)
         simulation_envs.append(custom_sim_env)
-        sim_patients_params.append(get_patient_params(custom_sim_env.env, priors))
+        # sim_patients_params.append(custom_sim_env.env.patient._params)  # noqa: SLF001
     # save to json
-    with Path("sim_patients_params.json").open("w") as file:
-        json.dump(sim_patients_params, file, indent=4)
+    # with Path("sim_patients_params.json").open("w") as file:
+    #     json.dump(sim_patients_params, file, indent=4)
+    # print("simulation_envs", len(simulation_envs))
     return simulation_envs
 
 
@@ -283,8 +294,19 @@ def simulate_batch(simulations: list[T1DSimEnv], device: torch.device) -> torch.
     return torch.from_numpy(results).float().to(device)
 
 
+# def wrapper(theta: torch.Tensor) -> torch.Tensor:
+#     # print("theta shape in wrapper func", theta.shape)
+#     return run_glucose_simulator(
+#         theta=theta,
+#         default_settings=default_settings,
+#         priors=prior,
+#         device=device,
+#         hours=default_settings.hours,
+#     )
+
+
 def run_glucose_simulator(
-    params_sets: torch.Tensor,
+    theta: torch.Tensor,
     default_settings: DeafultSimulationEnv,
     priors: Prior,
     device: torch.device,
@@ -312,8 +334,11 @@ def run_glucose_simulator(
 
     """
     # Suppose params_sets is (N, 23)
+    #
+    # print("params_sets", params_sets.shape)
+    # print("theta shape in run glucose simulator func", theta.shape)
     simulation_envs = create_simulation_envs_with_custom_params(
-        params_sets=params_sets,
+        theta=theta,
         default_settings=default_settings,
         priors=priors,
         hours=hours,
@@ -322,10 +347,10 @@ def run_glucose_simulator(
 
 
 def set_up_sbi_simulator(
-    default_settings: DeafultSimulationEnv,
     priors: Prior,
+    default_settings: DeafultSimulationEnv,
     device: torch.device,
-    glucose_simulator: Callable = run_glucose_simulator,
+    glucose_simulator: run_glucose_simulator,
 ) -> Callable:
     """Sets up and checks the simulator for the Sequential Bayesian Inference (SBI) framework.
 
@@ -348,18 +373,27 @@ def set_up_sbi_simulator(
         The SBI simulator function used to infer the parameters
 
     """
-    set_up_glucose_simulator = partial(
+    # print("#1 set_up_glucose_simulator")
+
+    # print("set_up_glucose_simulator", set_up_glucose_simulator)
+    processed_priors, _, _ = process_prior(priors.params_prior_distribution)
+    # print("processed_priors_distribution_shape", processed_priors.event_shape)
+    wrapper = partial(
         glucose_simulator,
         default_settings=default_settings,
-        priors=priors,
+        priors=prior,
         device=device,
     )
-    processed_priors = priors.params_prior_distribution
-
     script_logger.info("Prior of shape: %s", processed_priors.event_shape)
-    return process_simulator(
-        set_up_glucose_simulator, processed_priors, is_numpy_simulator=True
+    # print("#2 process_simulator")
+    sbi_simulator = process_simulator(
+        wrapper, processed_priors, is_numpy_simulator=True
     )
+    # print("#3 check_sbi_inputs")
+    check_sbi_inputs(sbi_simulator, processed_priors)
+    # print("processed_sbi_simulator", sbi_simulator)
+
+    return sbi_simulator
 
 
 def get_true_observation(
@@ -416,7 +450,7 @@ def sample_positive(proposal: Distribution, num_samples: int) -> torch.Tensor:
             if torch.all(sample > 0):
                 positive_samples.append(sample)
                 pbar.update(1)  # Update progress bar when a valid sample is found
-
+    # print("positive_samples_shape", torch.stack(positive_samples).shape)
     return torch.stack(positive_samples)
 
 
@@ -498,7 +532,8 @@ def run_tsnpe(
     inference = NPE(prior=prior, device=device)
     proposal = prior
     for _ in range(num_rounds):
-        theta = sample_positive(proposal, num_simulations)
+        theta = proposal.sample((num_simulations,))
+        # ("theta shape", theta.shape)
 
         x = simulator(theta)
 
@@ -694,7 +729,7 @@ def save_experimental_setup(
         pickle.dump(true_params, f)
 
 
-if __name__ == "main":
+if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
@@ -717,7 +752,7 @@ if __name__ == "main":
     device = set_up_device()
     script_logger = set_up_logging()
     pathos = True
-    sbi_settings: dict = config["sbi_setting"]
+    sbi_settings: dict = config["sbi_settings"]
     default_settings = DeafultSimulationEnv(
         patient_name=config["patient_name"],
         sensor_name=config["sensor_name"],
@@ -728,11 +763,18 @@ if __name__ == "main":
 
     prior: Prior = prepare_prior(
         data_file=config["priors_data_file"],
-        prior_type="mvn",
+        prior_type="BoxUniform",
         number_of_params=config["number_of_params"],
         inflation_factor=config["inflation_factor"],
         mean_shift=config["mean_shift"],
         device=device,
+    )
+
+    sbi_simulator = set_up_sbi_simulator(
+        priors=prior,
+        default_settings=default_settings,
+        device=device,
+        glucose_simulator=run_glucose_simulator,
     )
     true_observation, true_params = get_true_observation(
         priors=prior, env_settings=default_settings, hours=config["hours"]
@@ -741,9 +783,6 @@ if __name__ == "main":
         plt.plot(true_observation.to("cpu").numpy())
         plt.savefig(Path(save_path, "true_observation.png"))
 
-    sbi_simulator = set_up_sbi_simulator(
-        default_settings=default_settings, priors=prior, device=device
-    )
     sbi_settings = config["sbi_settings"]
     posterior_distribution = run_npe(
         algorithm=sbi_settings["algorithm"],
