@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from functools import partial
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Protocol
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -19,7 +19,10 @@ import seaborn as sns
 import torch
 import yaml
 from pathos.multiprocessing import ProcessingPool as Pool
-from sbi.inference import NPE, DirectPosterior
+from sbi.inference import (
+    NPE,
+    DirectPosterior,
+)
 from sbi.utils import RestrictedPrior, get_density_thresholder
 from sbi.utils.torchutils import BoxUniform
 from sbi.utils.user_input_checks import (
@@ -38,15 +41,14 @@ from sklearn.metrics import mean_squared_error
 from torch.distributions import Distribution, MultivariateNormal
 from tqdm import tqdm
 
-from glucose_sbi.prepare_priors import prepare_prior
-from glucose_sbi.sample_non_negative import sample_non_negative
+from prepare_priors import Prior, prepare_prior
+from sample_non_negative import sample_non_negative
 
 
-@dataclass
-class Prior:
-    type: str
-    params_names: list[str]
-    params_prior_distribution: Distribution | BoxUniform | MultivariateNormal
+class Posterior(Protocol):
+    def sample(
+        self, sample_shape: tuple[int, ...], x: torch.Tensor
+    ) -> torch.Tensor: ...
 
 
 @dataclass
@@ -106,7 +108,7 @@ def get_patient_params(env: T1DSimEnv, prior: Prior) -> dict:
     ----------
     env : T1DSimEnv
         simglucose simulation environment
-    prior : Priors
+    prior : Prior
         dataclass containing the priors for the patient parameters
         (we only want to look at the parameters that are being inferred)
 
@@ -157,7 +159,7 @@ def load_default_simulation_env(
     )
 
 
-def set_custom_params(patient: T1DPatient, theta: torch.Tensor, priors: Prior) -> None:
+def set_custom_params(patient: T1DPatient, theta: torch.Tensor, prior: Prior) -> None:
     """Apply the custom parameters (used for a particular simulation) for the patient.
 
     Parameters
@@ -166,13 +168,14 @@ def set_custom_params(patient: T1DPatient, theta: torch.Tensor, priors: Prior) -
         The patient object
     theta : torch.Tensor
         One set of custom paraeters to apply to the patient
-    priors : ParamPriors
-        The priors for the parameters
+    prior : Prior
+        The prior for the parameters
         (we need only the names of the parameters that will actually be used in the simulation)
 
     """
-    custom_params_values = theta.tolist()
-    param_names = priors.params_names
+    theta_copy = deepcopy(theta)
+    custom_params_values = theta_copy.tolist()
+    param_names = prior.params_names
 
     for i, param in enumerate(param_names):
         setattr(patient._params, param, custom_params_values[i])  # noqa: SLF001
@@ -181,7 +184,7 @@ def set_custom_params(patient: T1DPatient, theta: torch.Tensor, priors: Prior) -
 def create_simulation_envs_with_custom_params(
     theta: torch.Tensor,
     default_settings: DeafultSimulationEnv,
-    priors: Prior,
+    prior: Prior,
     hours: int = 24,
 ) -> list[T1DSimEnv]:
     """Creates a list of simulation environments with custom parameters.
@@ -192,8 +195,8 @@ def create_simulation_envs_with_custom_params(
         Sets of custom parameters to use for the simulation of shape (N_sets, N_params)
     default_settings : DeafultSimulationEnv
         DataClass object containing the default simulation environment settings.
-    priors : ParamPriors
-        DataClass object containing the priors for the parameters
+    prior : Prior
+        DataClass object containing the prior for the parameters
     hours : int, optional
         Duration of simulation, by default 24
 
@@ -210,7 +213,7 @@ def create_simulation_envs_with_custom_params(
     for _, theta_i in enumerate(theta):
         custom_sim_env = deepcopy(default_simulation_env)
 
-        set_custom_params(custom_sim_env.env.patient, theta_i, priors)
+        set_custom_params(custom_sim_env.env.patient, theta_i, prior)
         simulation_envs.append(custom_sim_env)
 
     return simulation_envs
@@ -268,7 +271,7 @@ def simulate_batch(simulations: list[T1DSimEnv], device: torch.device) -> torch.
 def run_glucose_simulator(
     theta: torch.Tensor,
     default_settings: DeafultSimulationEnv,
-    priors: Prior,
+    prior: Prior,
     device: torch.device,
     hours: int = 24,
 ) -> torch.Tensor:
@@ -280,7 +283,7 @@ def run_glucose_simulator(
         Sets of custom parameters to use for the simulation of shape (N_sets, N_params)
     default_settings : DeafultSimulationEnv
         DataClass object containing the default simulation environment settings.
-    priors : ParamPriors
+    prior : Prior
         DataClass object containing the priors for the parameters
     hours : int, optional
         Duration of the simulation, by default 24
@@ -299,17 +302,17 @@ def run_glucose_simulator(
     simulation_envs = create_simulation_envs_with_custom_params(
         theta=theta,
         default_settings=default_settings,
-        priors=priors,
+        prior=prior,
         hours=hours,
     )
     return simulate_batch(simulation_envs, device)
 
 
 def set_up_sbi_simulator(
-    priors: Prior,
+    prior: Prior,
     default_settings: DeafultSimulationEnv,
     device: torch.device,
-    glucose_simulator: Callable = run_glucose_simulator,
+    glucose_simulator: Callable[[torch.Tensor], torch.Tensor],
 ) -> Callable:
     """Sets up and checks the simulator for the Sequential Bayesian Inference (SBI) framework.
 
@@ -317,7 +320,7 @@ def set_up_sbi_simulator(
     ----------
     default_settings : DeafultSimulationEnv
         DataClass object containing the default simulation environment settings.
-    priors : ParamPriors
+    prior : Prior
         DataClass object containing the priors for the parameters
     device : torch.device
         Device used to run the simulation
@@ -332,19 +335,19 @@ def set_up_sbi_simulator(
         The SBI simulator function used to infer the parameters
 
     """
-    processed_priors, _, _ = process_prior(priors.params_prior_distribution)
+    processed_priors, _, _ = process_prior(prior.params_prior_distribution)
     script_logger.info(
         "Using prior distribution of shape: %s", processed_priors.event_shape
     )
-    wrapper = partial(
-        glucose_simulator,
-        default_settings=default_settings,
-        priors=prior,
-        device=device,
-    )
+    # wrapper = partial(
+    #     glucose_simulator,
+    #     default_settings=default_settings,
+    #     prior=prior,
+    #     device=device,
+    # )
 
     sbi_simulator = process_simulator(
-        wrapper, processed_priors, is_numpy_simulator=True
+        glucose_simulator, processed_priors, is_numpy_simulator=True
     )
 
     check_sbi_inputs(sbi_simulator, processed_priors)
@@ -383,13 +386,13 @@ def get_true_observation(
 
 
 def positive_sample_generator(
-    proposal: Distribution | RestrictedPrior,
+    distribution: Distribution,
 ) -> Generator[torch.Tensor, None, None]:
     """Generates all-positive samples from a distribution that has a `sample` method.
 
     Parameters
     ----------
-    proposal : Distribution | RestrictedPrior
+    distribution : Distribution | Posterior
         The distribution to sample from.
 
     Yields
@@ -399,19 +402,18 @@ def positive_sample_generator(
 
     """
     while True:
-        sample = proposal.sample()
+        # sample_shape = torch.Size([1])
+        sample = distribution.sample()
         if torch.all(sample > 0):
             yield sample
 
 
-def sample_positive(
-    proposal: Distribution | RestrictedPrior, num_samples: int
-) -> torch.Tensor:
+def sample_positive(distribution: Distribution, num_samples: int) -> torch.Tensor:
     """Samples positive values from a distribution.
 
     Parameters
     ----------
-    proposal : Distribution | RestrictedPrior
+    distribution : Distribution | Posterior
         The distribution to sample from.
     num_samples : int
         The number of samples to generate.
@@ -422,7 +424,7 @@ def sample_positive(
         The tensor of positive samples of shape (num_samples, num_params)
 
     """
-    gen = positive_sample_generator(proposal)
+    gen = positive_sample_generator(distribution)
     collected: list[torch.Tensor] = []
 
     while len(collected) < num_samples:
@@ -437,7 +439,7 @@ def sample_positive(
 
 
 def sample_from_posterior(
-    posterior: DirectPosterior,
+    posterior: Posterior,
     x_true: np.ndarray,
     num_samples: int = 1000,
     *,
@@ -467,26 +469,37 @@ def sample_from_posterior(
         return sample_non_negative(
             posterior, num_samples=num_samples, true_observation=torch.tensor(x_true)
         )
-
+    # sample_shape = torch.Size([num_samples])
     return posterior.sample(
-        (num_samples,), x=torch.tensor(x_true, dtype=torch.float32, device=device)
+        sample_shape=(num_samples,),
+        x=torch.tensor(x_true, dtype=torch.float32, device=device),
     )
 
 
+def run_bayes_flow(
+    prior: Distribution, simulator: Callable, num_sims: int
+) -> DirectPosterior:
+    inference = NPE(prior)
+    theta = prior.sample((num_sims,))
+    x = simulator(theta)
+    inference.append_simulations(theta, x).train()
+    return inference.build_posterior()
+
+
 def run_tsnpe(
-    prior: Distribution | DirectPosterior,
+    prior: Distribution,
     simulator: Callable,
     true_observation: torch.Tensor,
     device: torch.device,
     sampling_method: str,
     num_rounds: int = 10,
     num_simulations: int = 1000,
-) -> Distribution:
+) -> Posterior:
     """Runs the Truncated Sequential Neural Posterior Estimation (TSNPE) algorithm.
 
     Parameters
     ----------
-    prior : torch.distributions.Distribution | sbi.inference.posteriors.direct_posterior.DirectPosterior
+    prior : Distribution
         The prior distribution for the parameters to infer.
     simulator : callable
         The simulator function that generates the data.
@@ -503,7 +516,7 @@ def run_tsnpe(
 
     Returns
     -------
-    Distribution
+    Posterior
         The posterior distribution of the parameters.
 
     """
@@ -516,7 +529,8 @@ def run_tsnpe(
     for r in range(num_rounds):
         script_logger.info("Running round %s of %s", r + 1, num_rounds)
 
-        theta = sample_positive(proposal=proposal, num_samples=num_simulations)
+        theta = sample_positive(proposal, num_simulations)
+        script_logger.info("Simulating theta of shape: %s", theta.shape)
         x = simulator(theta)
         # Optional sanity check: ensure on same device
         theta = theta.to(device)
@@ -544,7 +558,7 @@ def run_apt(
     device: torch.device,
     num_rounds: int = 10,
     num_simulations: int = 1000,
-) -> Distribution:
+) -> Posterior:
     """Runs the Automatic Posterior Transformation (APT) NPE algorithm.
 
     Parameters
@@ -593,13 +607,13 @@ def run_apt(
 def run_npe(
     algorithm: str,
     true_observation: torch.Tensor,
-    priors: Prior,
+    prior: Prior,
     sampling_method: str,
     simulator: Callable,
     device: torch.device,
     num_rounds: int = 10,
     num_simulations: int = 1000,
-) -> Distribution:
+) -> Posterior:
     """Run the specified NPE algorithm.
 
     Parameters
@@ -608,7 +622,7 @@ def run_npe(
         The name of the NPE algorithm to run.
     true_observation : torch.Tensor
         The true observation to compare the inference results to.
-    priors : ParamPriors
+    prior : Prior
         DataClass object containing the priors for the parameters.
     sampling_method : str
         The sampling method to use.
@@ -627,7 +641,7 @@ def run_npe(
         The posterior distribution of the parameters.
 
     """
-    prior_distribution = priors.params_prior_distribution
+    prior_distribution = prior.params_prior_distribution
 
     if algorithm == "TSNPE":
         return run_tsnpe(
@@ -691,7 +705,7 @@ def save_meta(
 
 def save_experimental_setup(
     save_path: Path,
-    priors: Prior,
+    prior: Prior,
     default_settings: DeafultSimulationEnv,
     true_observation: torch.Tensor,
     true_params: dict,
@@ -700,7 +714,7 @@ def save_experimental_setup(
     folder = save_path / "Experimental Setup"
     folder.mkdir(parents=True, exist_ok=True)
     with Path(folder, "priors.pkl").open("wb") as f:
-        pickle.dump(priors, f)
+        pickle.dump(prior, f)
     with Path(folder, "default_settings.pkl").open("wb") as f:
         pickle.dump(default_settings, f)
     with Path(folder, "true_observation.pkl").open("wb") as f:
@@ -754,11 +768,20 @@ if __name__ == "__main__":
         prior.type,
         prior.params_prior_distribution.event_shape,
     )
+
+    def wrapper(theta: torch.Tensor) -> torch.Tensor:
+        return run_glucose_simulator(
+            theta=theta,
+            default_settings=default_settings,
+            prior=prior,
+            device=device,
+        )
+
     sbi_simulator = set_up_sbi_simulator(
-        priors=prior,
+        prior=prior,
         default_settings=default_settings,
         device=device,
-        glucose_simulator=run_glucose_simulator,
+        glucose_simulator=wrapper,
     )
     true_observation, true_params = get_true_observation(
         prior=prior, env_settings=default_settings, hours=config["hours"]
@@ -772,7 +795,7 @@ if __name__ == "__main__":
         algorithm=sbi_settings["algorithm"],
         simulator=sbi_simulator,
         true_observation=true_observation,
-        priors=prior,
+        prior=prior,
         sampling_method=sbi_settings["sampling_method"],
         device=device,
         num_rounds=sbi_settings["num_rounds"],
@@ -795,7 +818,7 @@ if __name__ == "__main__":
         glucose_dynamics = run_glucose_simulator(
             theta=posterior_samples,
             default_settings=default_settings,
-            priors=prior,
+            prior=prior,
             device=device,
         )
         glucose_dynamics_array = glucose_dynamics.cpu().numpy()
@@ -846,7 +869,7 @@ if __name__ == "__main__":
     )
     save_experimental_setup(
         save_path=save_path,
-        priors=prior,
+        prior=prior,
         default_settings=default_settings,
         true_observation=true_observation,
         true_params=true_params,
