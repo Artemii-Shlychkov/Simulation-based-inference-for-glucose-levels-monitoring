@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import torch
 from sbi.utils.torchutils import BoxUniform
 from torch.distributions import Distribution
@@ -185,7 +186,7 @@ def mvn_from_simglucose_patients(
 
 
 def box_uniform_from_simglucose_patients(
-    n_params: int, inflation_factor: float, device: torch.device
+    data_file: str, n_params: int, inflation_factor: float, device: torch.device
 ) -> Prior:
     """Creates a box uniform prior distribution from the known parameters of the simglucose patients.
 
@@ -207,7 +208,7 @@ def box_uniform_from_simglucose_patients(
     if inflation_factor <= 1:
         print("Inflation factor should be greater than 1. Setting it to 1.")
         inflation_factor = 1
-    with Path("all_patients_params.json").open() as f:
+    with Path(data_file).open() as f:
         all_patients_params = json.load(f)
     list_of_params = list(all_patients_params.keys())
     if n_params < len(list_of_params):
@@ -232,6 +233,68 @@ def box_uniform_from_simglucose_patients(
                 [uniform_params[key][1] for key in selected_params], device=device
             ),
         ),
+    )
+
+
+def mvn_from_domain_knowledge(data_file: str, device: torch.device) -> Prior:
+    """Creates a prior distribution from a .csv file containing the mean and \
+        standard deviation of the parameters.
+
+    Parameters
+    ----------
+    data_file : str
+        The path to the .csv file containing the mean and standard deviation of the parameters.
+    device : torch.device
+        The device to store the tensors on.
+
+    Returns
+    -------
+    Prior
+        The dataclass containing the prior distribution.
+
+    """
+    params_df = pd.read_csv(data_file)
+    param_names = params_df["Parameter"].tolist()
+    param_means = params_df["Mean"].to_numpy()
+    param_stds = params_df["Std"].to_numpy()
+    mean_tensor = torch.tensor(param_means, dtype=torch.float32)
+    std_tensor = torch.tensor(param_stds, dtype=torch.float32)
+    cov = torch.diag(std_tensor**2)
+    stability_factor = 1e-4
+    cov += torch.eye(cov.shape[0]) * stability_factor
+    return Prior(
+        type="mvn",
+        params_names=param_names,
+        params_prior_distribution=MultivariateNormal(
+            loc=mean_tensor, covariance_matrix=cov, device=device
+        ),
+    )
+
+
+def mix_gaussian_prior(mvn_list: list[Prior]) -> Prior:
+    """Creates a mixture of Gaussian prior distribution from a list of prior distributions.
+
+    Parameters
+    ----------
+    mvn_list : list[Prior]
+        List of prior distributions to mix.
+
+    Returns
+    -------
+    Prior
+        The dataclass containing the prior distribution.
+
+    """
+    n_params = len(mvn_list[0].params_names)
+    n_distributions = len(mvn_list)
+    weights = torch.ones(n_distributions) / n_distributions
+    weights = weights.to(mvn_list[0].params_prior_distribution.loc.device)
+
+    return Prior(
+        type="mix_gaussian",
+        params_names=mvn_list[0].params_names,
+        params_prior_distribution=mvn_list[0].params_prior_distribution,
+        weights=weights,
     )
 
 
@@ -281,7 +344,13 @@ def prepare_prior(
         )
     if prior_type == "BoxUniform":
         return box_uniform_from_simglucose_patients(
-            number_of_params, inflation_factor, device
+            data_file=data_file,
+            n_params=number_of_params,
+            inflation_factor=inflation_factor,
+            device=device,
         )
+
+    if prior_type == "mvn_domain_knowledge":
+        return mvn_from_domain_knowledge(data_file, device)
     msg = "Invalid prior type or not implemented yet."
     raise ValueError(msg)
