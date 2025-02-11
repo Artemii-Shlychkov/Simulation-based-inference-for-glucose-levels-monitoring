@@ -33,7 +33,7 @@ class DirectPosteriorNonnegative(DirectPosterior):
         max_sampling_batch_size: int = 10_000,
         sample_with: str | None = None,
         *,
-        show_progress_bars: bool = True,
+        show_progress_bars: bool = False,
     ) -> torch.Tensor:
         num_samples = torch.Size(sample_shape).numel()
         x = self._x_else_default_x(x)
@@ -81,7 +81,9 @@ class DirectPosteriorNonnegative(DirectPosterior):
 
 
 def sample_non_negative(
-    posterior: DirectPosterior, num_samples: int, true_observation: torch.Tensor
+    posterior: DirectPosterior,
+    num_samples: int,
+    true_observation: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Sample from a posterior, ensuring all samples are nonnegative.
 
@@ -105,7 +107,7 @@ def sample_non_negative(
         posterior_estimator=posterior.posterior_estimator,
         prior=posterior.prior,
         max_sampling_batch_size=posterior.max_sampling_batch_size,
-        device=posterior.device,
+        device=posterior._device,  # noqa: SLF001
     )
     sample_size = torch.Size([num_samples])
 

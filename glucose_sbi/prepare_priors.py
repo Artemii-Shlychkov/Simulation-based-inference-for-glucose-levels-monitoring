@@ -1,5 +1,6 @@
 import json
 import random
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -9,7 +10,12 @@ import torch
 from sbi.utils.torchutils import BoxUniform
 from torch.distributions import Distribution, MultivariateNormal
 
-from glucose_sbi.infer_parameters import Prior
+
+@dataclass
+class Prior:
+    type: str
+    params_names: list[str]
+    params_prior_distribution: Distribution | BoxUniform | MultivariateNormal
 
 
 def select_random_params(n_params: int, list_of_params: list[str]) -> list[str]:
@@ -33,6 +39,10 @@ def mvn_from_simglucose_patients(
     data_file : str
         Path to JSON (or similarly structured) file with patient parameters.
         The JSON is expected to have structure: {param_name: [val_patient1, val_patient2, ...], ...}
+    device : torch.device
+        Device on which to place the resulting distribution's tensors.
+    number_of_params : int
+        Number of parameters to use. If n_params < len(list_of_params), a random subset of parameters is selected.
     cov_inflation_factor : float, default=1.2
         Factor by which to multiply the covariance matrix. (1.0 => no inflation)
     mean_shift_scale : float or None, default=0.1
@@ -40,12 +50,8 @@ def mvn_from_simglucose_patients(
             shift_i ~ Normal(0, mean_shift_scale * abs(mean_i))
         Then add it to the empirical mean.
         If None, no random shift is applied.
-    device : torch.device
-        Device on which to place the resulting distribution's tensors.
-    min_inflation : float, default=1e-4
+    numerical_stability_factor : float, default=1e-4
         Minimum inflation added to the diagonal to prevent singular covariance.
-    random_state : int, default=42
-        Random seed for reproducible shift.
 
     Returns
     -------
@@ -97,14 +103,7 @@ def mvn_from_simglucose_patients(
         mean_final_t = mean_emp_t
 
     # --- 4) Build the MVN distribution. ---
-    final_mvn = MultivariateNormal(loc=mean_final_t, covariance_matrix=cov_inflated_t)
-
-    # --- 5) Return as a Prior dataclass. ---
-    return Prior(
-        type="mvn",
-        params_names=param_names,
-        params_prior_distribution=final_mvn,
-    )
+    return MultivariateNormal(loc=mean_final_t, covariance_matrix=cov_inflated_t)
 
 
 def box_uniform_from_simglucose_patients(
@@ -114,6 +113,9 @@ def box_uniform_from_simglucose_patients(
 
     Parameters
     ----------
+    data_file : str
+        path to a JSON file containing the patient parameters.
+        The JSON is expected to have structure: {param_name: [val_patient1, val_patient2, ...], ...}
     n_params : int
         number of parameters to use. IF n_params < len(list_of_params), a random subset of parameters is selected.
     inflation_factor : float
@@ -124,7 +126,10 @@ def box_uniform_from_simglucose_patients(
     Returns
     -------
     Prior
-        The dataclass containing the prior distribution.
+        A dataclass holding:
+            - type='BoxUniform'
+            - params_names: the list of parameter names in `data_file`
+            - params_prior_distribution: the resulting BoxUniform distribution
 
     """
     if inflation_factor <= 1:
@@ -146,21 +151,20 @@ def box_uniform_from_simglucose_patients(
         min_val = min(all_patients_params[key]) / inflation_factor
         uniform_params[key] = (min_val, max_val)
 
-    return Prior(
-        type="BoxUniform",
-        params_names=selected_params,
-        params_prior_distribution=BoxUniform(
-            low=torch.tensor(
-                [uniform_params[key][0] for key in selected_params], device=device
-            ),
-            high=torch.tensor(
-                [uniform_params[key][1] for key in selected_params], device=device
-            ),
+    return BoxUniform(
+        low=torch.tensor(
+            [uniform_params[key][0] for key in selected_params], device=device
+        ),
+        high=torch.tensor(
+            [uniform_params[key][1] for key in selected_params], device=device
         ),
     )
 
 
-def mvn_from_domain_knowledge(data_file: str, device: torch.device) -> Prior:
+def mvn_from_domain_knowledge(
+    data_file: str,
+    n_params: int,
+) -> MultivariateNormal:
     """Creates a prior distribution from a .csv file containing the mean and \
         standard deviation of the parameters.
 
@@ -168,17 +172,23 @@ def mvn_from_domain_knowledge(data_file: str, device: torch.device) -> Prior:
     ----------
     data_file : str
         The path to the .csv file containing the mean and standard deviation of the parameters.
-    device : torch.device
-        The device to store the tensors on.
+    n_params : int
+        The number of parameters to use. If n_params < len(list_of_params), a random subset of parameters is selected.
 
     Returns
     -------
-    Prior
-        The dataclass containing the prior distribution.
+    MultivariateNormal
+        A multivariate normal distribution with the mean and standard deviation of the parameters.
 
     """
     params_df = pd.read_csv(data_file, header=0)
     param_names = params_df["Parameter"].tolist()
+
+    if n_params < len(param_names):
+        selected_params = select_random_params(n_params, param_names)
+    else:
+        selected_params = param_names
+
     param_means = params_df["Mean"].to_numpy()
     param_stds = params_df["Std"].to_numpy()
     mean_tensor = torch.tensor(param_means, dtype=torch.float32)
@@ -186,14 +196,8 @@ def mvn_from_domain_knowledge(data_file: str, device: torch.device) -> Prior:
     cov = torch.diag(std_tensor**2)
     stability_factor = 1e-4
     cov += torch.eye(cov.shape[0]) * stability_factor
-    return Prior(
-        type="mvn",
-        params_names=param_names,
-        params_prior_distribution=MultivariateNormal(
-            loc=mean_tensor,
-            covariance_matrix=cov,
-        ),
-    )
+
+    return MultivariateNormal(loc=mean_tensor, covariance_matrix=cov)
 
 
 def prepare_prior(
@@ -208,6 +212,8 @@ def prepare_prior(
 
     Parameters
     ----------
+    data_file : str
+        path to a file containing the patient parameters.
     prior_type : str
         type of prior to create. Either "mvn" or "BoxUniform".
     number_of_params : int
@@ -224,7 +230,10 @@ def prepare_prior(
     Returns
     -------
     Prior
-        The dataclass containing the prior distribution.
+        A dataclass holding:
+            - type='mvn' or 'BoxUniform'
+            - params_names: the list of parameter names in `data_file`
+            - params_prior_distribution: the resulting prior distribution
 
     Raises
     ------
