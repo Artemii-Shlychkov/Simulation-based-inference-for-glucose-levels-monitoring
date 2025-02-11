@@ -19,3 +19,4 @@
 *.kshrc
 *.wget-hsts
 *.zshrc
+*.gitconfig
