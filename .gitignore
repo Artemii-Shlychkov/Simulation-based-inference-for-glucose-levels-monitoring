@@ -1,0 +1,21 @@
+*.log
+/logs/
+/.cache/
+/.conda/
+/.config/
+/.dotnet/
+/.local/
+/.nv/
+/.ssh/
+/.vs/
+/.vscode*/
+/archive/
+
+#all files starting with .bash
+*.bash*
+*/results/
+*/sbi-logs/
+*.ssh
+*.kshrc
+*.wget-hsts
+*.zshrc
