@@ -62,7 +62,7 @@ class DeafultSimulationEnv:
 
 def set_up_logging(saving_path: Path) -> logging.Logger:
     """Set up the logging configuration for the script."""
-    logger = logging.getLogger("script_logger")
+    logger = logging.getLogger("sbi_logger")
     logger.setLevel(logging.INFO)
     handler = logging.FileHandler(Path(saving_path, "inference_execution.log"))
     formatter = logging.Formatter(
@@ -492,8 +492,11 @@ def bayes_flow(
         The posterior distribution of the parameters.
 
     """
+    script_logger.info(
+        "Running BayesFlow inference on prior of shape: %s", prior.event_shape
+    )
     inference = NPE(prior=prior, device=device)
-    theta = prior.sample((num_sims,))
+    theta = sample_positive(prior, num_sims)
     x = simulator(theta)
     theta = theta.to(device)
     x = x.to(device)
@@ -597,6 +600,7 @@ def apt(
         The posterior distribution of the parameters.
 
     """
+    script_logger.info("Running APT inference on prior of shape: %s", prior.event_shape)
     # Initialize NPE on device
     inference = NPE(prior=prior, device=device)
 
@@ -889,7 +893,7 @@ if __name__ == "__main__":
 
     shutil.copyfile(
         Path("simulation_configs") / args.config,
-        Path(save_path) / Path(args.config).name,
+        Path(save_path) / Path("simulation_config.yaml"),
     )
     script_logger.info("Parameter inference session completed")
     script_logger.info("_" * 80)

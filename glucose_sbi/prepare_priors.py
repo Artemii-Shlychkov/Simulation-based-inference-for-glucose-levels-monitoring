@@ -1,21 +1,29 @@
 import json
+import logging
 import random
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
-import pandas as pd
 import torch
 from sbi.utils.torchutils import BoxUniform
-from torch.distributions import Distribution, MultivariateNormal
+from torch.distributions import (
+    Distribution,
+    ExpTransform,
+    MultivariateNormal,
+    TransformedDistribution,
+)
+
+logger = logging.getLogger("sbi_logger")
 
 
 @dataclass
 class Prior:
     type: str
     params_names: list[str]
-    params_prior_distribution: Distribution | BoxUniform | MultivariateNormal
+    params_prior_distribution: (
+        Distribution | BoxUniform | MultivariateNormal | TransformedDistribution
+    )
 
 
 def select_random_params(n_params: int, list_of_params: list[str]) -> list[str]:
@@ -55,6 +63,7 @@ def construct_mvn_prior(
         A multivariate normal distribution with the inflated covariance and possibly shifted mean.
 
     """
+    logger.info("Constructing MVN prior...")
     # --- 1) Compute empirical mean and covariance. ---
     data_array = np.array([data[key] for key in data])
 
@@ -63,9 +72,7 @@ def construct_mvn_prior(
 
     # --- 2) Inflate the covariance. ---
     if cov_inflation_factor < 1.0:
-        print(
-            f"Warning: cov_inflation_factor={cov_inflation_factor} < 1.0 => shrinking cov?"
-        )
+        logger.warning("Warning: cov_inflation_factor < 1.0 => shrinking cov?")
     # Add a small diagonal for numerical stability & scale overall
     cov_inflated = cov_emp * cov_inflation_factor
     cov_inflated += np.eye(cov_inflated.shape[0]) * numerical_stability_factor
@@ -88,6 +95,90 @@ def construct_mvn_prior(
     return MultivariateNormal(loc=mean_final_t, covariance_matrix=cov_inflated_t)
 
 
+def construct_lognormal_prior(
+    device: torch.device,
+    data: dict,
+    cov_inflation_factor: float = 1.0,
+    mean_shift_scale: float = 0.0,
+    numerical_stability_factor: float = 1e-4,
+) -> TransformedDistribution:
+    """Creates a log-multivariate normal distribution from positive data, by:
+      1) taking log of the data,
+      2) computing mean, cov,
+      3) optionally inflating covariance and shifting mean,
+      4) constructing a base MVN in log-space,
+      5) exponentiating via ExpTransform -> final distribution is lognormal in real space.
+    The final returned distribution is a `TransformedDistribution(base_mvn, ExpTransform())`.
+    Sampling from it yields strictly positive vectors.
+
+    Parameters
+    ----------
+    data : dict
+        patient parameters. The data is expected to have structure:
+          {param_name: [val_patient1, val_patient2, ...], ...}
+        *All values must be > 0* (strictly positive).
+    device : torch.device
+        Device on which to place the resulting distribution's tensors.
+    cov_inflation_factor : float, default=1.0
+        Factor by which to multiply the covariance matrix in log-space. (1.0 => no inflation)
+    mean_shift_scale : float, default=0.0
+        If > 0, we sample a random shift in log-space for each dimension:
+            shift_i ~ Normal(0, mean_shift_scale * abs(log_mean_i))
+        Then add it to the empirical log-mean.
+    numerical_stability_factor : float, default=1e-4
+        Minimum inflation added to the diagonal of the covariance (in log-space)
+        to ensure it's positive-definite.
+
+    Returns
+    -------
+    TransformedDistribution
+        A log-multivariate normal distribution. i.e. samples are always > 0.
+        This object has .sample() and .log_prob() methods in real (positive) space.
+
+    """
+    logger.info("Constructing lognormal prior...")
+    # 1) Convert data dict to array shape (n_params, n_samples).
+    data_array = np.array([data[key] for key in data])
+
+    # Ensure data > 0. (If any zero or negative, either raise an error or fix them.)
+    if not np.all(data_array > 0):
+        raise ValueError("All data values must be strictly > 0 for log transform.")
+
+    # 2) Move to log-space: shape still (n_params, n_samples).
+    log_data = np.log(data_array)
+
+    # 3) Compute empirical mean & cov in log-space.
+    mean_emp_log = np.mean(log_data, axis=1)  # shape (n_params,)
+    cov_emp_log = np.cov(log_data)  # shape (n_params, n_params)
+
+    # 4) Inflate the covariance in log-space.
+    if cov_inflation_factor < 1.0:
+        logger.warning("Warning: cov_inflation_factor < 1.0 => shrinking cov?")
+
+    cov_inflated = cov_emp_log * cov_inflation_factor
+
+    # Add small diagonal for numerical stability.
+    cov_inflated += np.eye(cov_inflated.shape[0]) * numerical_stability_factor
+
+    # 5) Convert to torch tensors.
+    mean_log_t = torch.tensor(mean_emp_log, dtype=torch.float32, device=device)
+    cov_log_t = torch.tensor(cov_inflated, dtype=torch.float32, device=device)
+
+    # 6) Optionally shift the log-mean stochastically.
+    if mean_shift_scale > 0:
+        gen = torch.Generator(device=device)
+        stddev_vec = mean_log_t.abs() * mean_shift_scale
+        shift_vec = torch.normal(mean=0.0, std=stddev_vec, generator=gen)
+        mean_log_t = mean_log_t + shift_vec
+
+    # 7) Build the base MVN in log-space.
+    base_mvn = MultivariateNormal(loc=mean_log_t, covariance_matrix=cov_log_t)
+
+    # 8) Wrap with ExpTransform => final distribution in real (positive) space.
+    #    log_prob automatically accounts for log|Jacobian| if you use .log_prob in real space.
+    return TransformedDistribution(base_mvn, ExpTransform())
+
+
 def construct_box_uniform_prior(
     data: dict, device: torch.device, inflation_factor: float = 1.0
 ) -> Prior:
@@ -96,7 +187,7 @@ def construct_box_uniform_prior(
     Parameters
     ----------
     data : dict
-        patient parameters. The data is expected to have structure: {param_name: [val_patient1, val_patient2, ...], ...}
+        patient parameters. The data is expected to have structure: {param_name: [val_patient1, val_patient2, ...], ...} or {param_name: [max_val, min_val], ...}
     inflation_factor : float
         amount to inflate the parameter range by. By default, no inflation is applied.
     device : torch.device
@@ -111,12 +202,15 @@ def construct_box_uniform_prior(
             - params_prior_distribution: the resulting BoxUniform distribution
 
     """
-    inflation_factor = max(inflation_factor, 1)
+    logger.info("Constructing BoxUniform prior...")
+    if inflation_factor < 1.0:
+        logger.warning("Warning: inflation_factor < 1.0 => shrinking range?")
 
     uniform_params = {}
     for key, values in data.items():
         max_val = max(values) * inflation_factor
         min_val = min(values) / inflation_factor
+        min_val = max(0, min_val)  # Ensure non-negative values
         uniform_params[key] = (min_val, max_val)
 
     return BoxUniform(
@@ -225,6 +319,17 @@ def prepare_prior(
                 data=selected_data,
                 inflation_factor=inflation_factor,
                 device=device,
+            ),
+        )
+    if prior_type == "lognormal":
+        return Prior(
+            type="lognormal",
+            params_names=selected_params,
+            params_prior_distribution=construct_lognormal_prior(
+                data=selected_data,
+                device=device,
+                cov_inflation_factor=inflation_factor,
+                mean_shift_scale=mean_shift,
             ),
         )
     if prior_type == "mvn_domain_knowledge":
