@@ -13,18 +13,20 @@ scenario:
       - - 23
         - 10
 hours: 24
-priors_data_file: "all_patients_params.json"
-inflation_factor: 1.5
-mean_shift: 0.2
-prior_type: 'uniform'
+
+prior_settings:
+  priors_data_file: "all_sg_patients_params_values.json"
+  inflation_factor: 1
+  mean_shift: 0
+  prior_type: 'mvn'
+  number_of_params: 5
 
 sbi_settings:
-  algorithm: TSNPE
+  algorithm: BayesFlow
   sampling_method: 'sir'
-  num_simulations: 15000
-  num_rounds: 5
-  n_samples_from_posterior: 1000
-
-number_of_params: 45
+  num_simulations: 1000
+  num_rounds: 1
+  n_samples_from_posterior: 100
+  
 
 

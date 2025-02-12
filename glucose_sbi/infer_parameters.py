@@ -2,7 +2,6 @@ import argparse
 import json
 import logging
 import pickle
-import random
 import shutil
 import time
 from collections.abc import Generator
@@ -24,7 +23,6 @@ from sbi.inference import (
     DirectPosterior,
 )
 from sbi.utils import RestrictedPrior, get_density_thresholder
-from sbi.utils.torchutils import BoxUniform
 from sbi.utils.user_input_checks import (
     check_sbi_inputs,
     process_prior,
@@ -38,7 +36,7 @@ from simglucose.simulation.env import T1DSimEnv
 from simglucose.simulation.scenario import CustomScenario
 from simglucose.simulation.sim_engine import SimObj
 from sklearn.metrics import mean_squared_error
-from torch.distributions import Distribution, MultivariateNormal
+from torch.distributions import Distribution
 from tqdm import tqdm
 
 from prepare_priors import Prior, prepare_prior
@@ -312,7 +310,7 @@ def set_up_sbi_simulator(
     prior: Prior,
     default_settings: DeafultSimulationEnv,
     device: torch.device,
-    glucose_simulator: Callable[[torch.Tensor], torch.Tensor],
+    glucose_simulator: Callable[..., torch.Tensor],
 ) -> Callable:
     """Sets up and checks the simulator for the Sequential Bayesian Inference (SBI) framework.
 
@@ -339,15 +337,15 @@ def set_up_sbi_simulator(
     script_logger.info(
         "Using prior distribution of shape: %s", processed_priors.event_shape
     )
-    # wrapper = partial(
-    #     glucose_simulator,
-    #     default_settings=default_settings,
-    #     prior=prior,
-    #     device=device,
-    # )
+    wrapper = partial(
+        glucose_simulator,
+        default_settings=default_settings,
+        prior=prior,
+        device=device,
+    )
 
     sbi_simulator = process_simulator(
-        glucose_simulator, processed_priors, is_numpy_simulator=True
+        wrapper, processed_priors, is_numpy_simulator=True
     )
 
     check_sbi_inputs(sbi_simulator, processed_priors)
@@ -402,7 +400,6 @@ def positive_sample_generator(
 
     """
     while True:
-        # sample_shape = torch.Size([1])
         sample = distribution.sample()
         if torch.all(sample > 0):
             yield sample
@@ -469,24 +466,42 @@ def sample_from_posterior(
         return sample_non_negative(
             posterior, num_samples=num_samples, true_observation=torch.tensor(x_true)
         )
-    # sample_shape = torch.Size([num_samples])
     return posterior.sample(
         sample_shape=(num_samples,),
         x=torch.tensor(x_true, dtype=torch.float32, device=device),
     )
 
 
-def run_bayes_flow(
+def bayes_flow(
     prior: Distribution, simulator: Callable, num_sims: int
 ) -> DirectPosterior:
-    inference = NPE(prior)
+    """Run the BayesFlow algorithm (single round of NPE).
+
+    Parameters
+    ----------
+    prior : Distribution
+        The prior distribution for the parameters to infer.
+    simulator : Callable
+        The simulator function that generates the data.
+    num_sims : int
+        The number of simulations to run.
+
+    Returns
+    -------
+    DirectPosterior
+        The posterior distribution of the parameters.
+
+    """
+    inference = NPE(prior=prior, device=device)
     theta = prior.sample((num_sims,))
     x = simulator(theta)
+    theta = theta.to(device)
+    x = x.to(device)
     inference.append_simulations(theta, x).train()
     return inference.build_posterior()
 
 
-def run_tsnpe(
+def tsnpe(
     prior: Distribution,
     simulator: Callable,
     true_observation: torch.Tensor,
@@ -551,7 +566,7 @@ def run_tsnpe(
     return posterior
 
 
-def run_apt(
+def apt(
     prior: Distribution | DirectPosterior,
     simulator: Callable,
     true_observation: torch.Tensor,
@@ -644,7 +659,7 @@ def run_npe(
     prior_distribution = prior.params_prior_distribution
 
     if algorithm == "TSNPE":
-        return run_tsnpe(
+        return tsnpe(
             prior=prior_distribution,
             simulator=simulator,
             device=device,
@@ -654,13 +669,17 @@ def run_npe(
             true_observation=true_observation,
         )
     if algorithm == "APT":
-        return run_apt(
+        return apt(
             prior=prior_distribution,
             simulator=simulator,
             device=device,
             true_observation=true_observation,
             num_rounds=num_rounds,
             num_simulations=num_simulations,
+        )
+    if algorithm == "BayesFlow":
+        return bayes_flow(
+            prior=prior_distribution, simulator=simulator, num_sims=num_simulations
         )
     msg = f"Invalid NPE algorithm: {algorithm}"
     raise ValueError(msg)
@@ -755,12 +774,13 @@ if __name__ == "__main__":
         hours=config["hours"],
     )
 
+    prior_settings: dict = config["prior_settings"]
     prior: Prior = prepare_prior(
-        data_file=config["priors_data_file"],
-        prior_type=config["prior_type"],
-        number_of_params=config["number_of_params"],
-        inflation_factor=config["inflation_factor"],
-        mean_shift=config["mean_shift"],
+        data_file=prior_settings["priors_data_file"],
+        prior_type=prior_settings["prior_type"],
+        number_of_params=prior_settings["number_of_params"],
+        inflation_factor=prior_settings["inflation_factor"],
+        mean_shift=prior_settings["mean_shift"],
         device=device,
     )
     script_logger.info(
@@ -769,19 +789,11 @@ if __name__ == "__main__":
         prior.params_prior_distribution.event_shape,
     )
 
-    def wrapper(theta: torch.Tensor) -> torch.Tensor:
-        return run_glucose_simulator(
-            theta=theta,
-            default_settings=default_settings,
-            prior=prior,
-            device=device,
-        )
-
     sbi_simulator = set_up_sbi_simulator(
         prior=prior,
         default_settings=default_settings,
         device=device,
-        glucose_simulator=wrapper,
+        glucose_simulator=run_glucose_simulator,
     )
     true_observation, true_params = get_true_observation(
         prior=prior, env_settings=default_settings, hours=config["hours"]
