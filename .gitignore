@@ -20,3 +20,4 @@
 *.wget-hsts
 *.zshrc
 *.gitconfig
+*.pyc
