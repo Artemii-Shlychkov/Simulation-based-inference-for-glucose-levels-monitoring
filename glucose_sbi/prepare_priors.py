@@ -166,6 +166,8 @@ def construct_lognormal_prior(
 
     # 6) Optionally shift the log-mean stochastically.
     if mean_shift_scale > 0:
+        if mean_shift_scale > 1.0:
+            logger.warning("Warning: mean_shift_scale > 1.0 => too large shifts?")
         gen = torch.Generator(device=device)
         stddev_vec = mean_log_t.abs() * mean_shift_scale
         shift_vec = torch.normal(mean=0.0, std=stddev_vec, generator=gen)
@@ -248,6 +250,7 @@ def mvn_from_domain_knowledge(
 
 
 def prepare_prior(
+    script_dir: Path,
     data_file: str,
     prior_type: str,
     number_of_params: int,
@@ -289,7 +292,8 @@ def prepare_prior(
         If an invalid prior type is provided.
 
     """
-    with Path(data_file).open() as f:
+    # script_dir = Path(__file__).parent
+    with Path(script_dir / data_file).open("r") as f:
         all_patients_params = json.load(f)
 
     list_of_params = list(all_patients_params.keys())

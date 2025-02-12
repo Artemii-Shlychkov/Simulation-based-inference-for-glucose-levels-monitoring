@@ -1,0 +1,29 @@
+patient_name: "adolescent#002"
+sensor_name: "Dexcom"
+pump_name: "Insulet"
+scenario: 
+      - - 7
+        - 45
+      - - 12
+        - 70
+      - - 16
+        - 15
+      - - 18
+        - 80
+      - - 23
+        - 10
+hours: 24
+
+prior_settings:
+  priors_data_file: "all_sg_patients_params_values.json"
+  inflation_factor: 1.1 
+  mean_shift: 0.2
+  prior_type: 'lognormal' # 'lognormal', 'mvn' or 'uniform'
+  number_of_params: 23
+
+sbi_settings:
+  algorithm: BayesFlow # BayesFlow, TSNPE or APT
+  sampling_method: 'sir' # 'sir' or 'rejection'; Only needed for TSNPE
+  num_simulations: 10000
+  num_rounds: 1 # Only needed for TSNPE or APT
+  n_samples_from_posterior: 1000

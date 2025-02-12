@@ -39,8 +39,8 @@ from sklearn.metrics import mean_squared_error
 from torch.distributions import Distribution
 from tqdm import tqdm
 
-from prepare_priors import Prior, prepare_prior
-from sample_non_negative import sample_non_negative
+from glucose_sbi.prepare_priors import Prior, prepare_prior
+from glucose_sbi.sample_non_negative import sample_non_negative
 
 
 class Posterior(Protocol):
@@ -73,7 +73,7 @@ def set_up_logging(saving_path: Path) -> logging.Logger:
     return logger
 
 
-def load_config(config_name: "str") -> dict:
+def load_config(script_dir, config_name: "str") -> dict:
     """Loads the configuration file.
 
     Parameters
@@ -87,7 +87,8 @@ def load_config(config_name: "str") -> dict:
         The configuration file as a dictionary.
 
     """
-    with Path(f"simulation_configs/{config_name}").open() as file:
+    # script_dir = Path(__file__).resolve().parent
+    with Path(script_dir / "simulation_configs" / config_name).open("r") as file:
         script_logger.info("Loaded configuration file: %s", config_name)
         return yaml.safe_load(file)
 
@@ -689,10 +690,11 @@ def run_npe(
     raise ValueError(msg)
 
 
-def set_up_saving_path() -> Path:
+def set_up_saving_path(script_dir) -> Path:
     """Set up the saving path for the simulation results."""
     date_time = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d_%H-%M")
-    saving_path = Path(f"results/{date_time}")
+    # script_dir = Path(__file__).resolve().parent
+    saving_path = Path(script_dir / "results" / date_time)
     saving_path.mkdir(parents=True, exist_ok=True)
     return saving_path
 
@@ -759,12 +761,12 @@ if __name__ == "__main__":
         "--plot", action="store_true", help="Plot the results", default=False
     )
     args = parser.parse_args()
-
-    save_path = set_up_saving_path()
+    script_dir = Path(__file__).resolve().parent
+    save_path = set_up_saving_path(script_dir=script_dir)
     script_logger = set_up_logging(saving_path=save_path)
     script_logger.info("Starting the parameter inference session")
 
-    config = load_config(args.config)
+    config = load_config(script_dir, args.config)
 
     device = set_up_device()
 
@@ -780,6 +782,7 @@ if __name__ == "__main__":
 
     prior_settings: dict = config["prior_settings"]
     prior: Prior = prepare_prior(
+        script_dir=script_dir,
         data_file=prior_settings["priors_data_file"],
         prior_type=prior_settings["prior_type"],
         number_of_params=prior_settings["number_of_params"],
@@ -892,7 +895,7 @@ if __name__ == "__main__":
     )
 
     shutil.copyfile(
-        Path("simulation_configs") / args.config,
+        Path(script_dir / "simulation_configs" / args.config),
         Path(save_path) / Path("simulation_config.yaml"),
     )
     script_logger.info("Parameter inference session completed")

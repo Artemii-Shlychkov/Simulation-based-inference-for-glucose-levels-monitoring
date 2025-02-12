@@ -21,3 +21,4 @@
 *.zshrc
 *.gitconfig
 *.pyc
+*sbi-logs/

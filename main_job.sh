@@ -13,4 +13,4 @@ module load Anaconda3
 module load CUDA/12.2.0
 module load Workspace_Home
 eval "$(conda shell.bash hook)"
-/storage/homefs/as25u160/.conda/envs/myenv/bin/python3.12 /storage/homefs/as25u160/scripts/infer_parameters_2.py --config "default_config_2.yaml" --plot
+/storage/homefs/as25u160/.conda/envs/myenv/bin/python3.12 -m glucose_sbi.infer_parameters --config "main_config.yaml" --plot
