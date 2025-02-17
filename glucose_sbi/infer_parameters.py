@@ -1,5 +1,4 @@
 import argparse
-import json
 import logging
 import pickle
 import shutil
@@ -73,11 +72,13 @@ def set_up_logging(saving_path: Path) -> logging.Logger:
     return logger
 
 
-def load_config(script_dir, config_name: "str") -> dict:
+def load_config(script_dir: Path, config_name: "str") -> dict:
     """Loads the configuration file.
 
     Parameters
     ----------
+    script_dir : Path
+        The path to the script directory.
     config_name : str
         The name of the configuration file to load.
 
@@ -87,7 +88,6 @@ def load_config(script_dir, config_name: "str") -> dict:
         The configuration file as a dictionary.
 
     """
-    # script_dir = Path(__file__).resolve().parent
     with Path(script_dir / "simulation_configs" / config_name).open("r") as file:
         script_logger.info("Loaded configuration file: %s", config_name)
         return yaml.safe_load(file)
@@ -513,7 +513,7 @@ def tsnpe(
     sampling_method: str,
     num_rounds: int = 10,
     num_simulations: int = 1000,
-) -> Posterior:
+) -> DirectPosterior:
     """Runs the Truncated Sequential Neural Posterior Estimation (TSNPE) algorithm.
 
     Parameters
@@ -577,7 +577,7 @@ def apt(
     device: torch.device,
     num_rounds: int = 10,
     num_simulations: int = 1000,
-) -> Posterior:
+) -> DirectPosterior:
     """Runs the Automatic Posterior Transformation (APT) NPE algorithm.
 
     Parameters
@@ -602,7 +602,7 @@ def apt(
 
     """
     script_logger.info("Running APT inference on prior of shape: %s", prior.event_shape)
-    # Initialize NPE on device
+
     inference = NPE(prior=prior, device=device)
 
     proposal = prior  # start with prior
@@ -690,42 +690,48 @@ def run_npe(
     raise ValueError(msg)
 
 
-def set_up_saving_path(script_dir) -> Path:
+def set_up_saving_path(script_dir: Path) -> Path:
     """Set up the saving path for the simulation results."""
     date_time = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d_%H-%M")
-    # script_dir = Path(__file__).resolve().parent
     saving_path = Path(script_dir / "results" / date_time)
     saving_path.mkdir(parents=True, exist_ok=True)
     return saving_path
 
 
 def save_meta(
+    config: dict,
     device: str,
     selected_params: list[str],
-    patient: str,
-    scenario: list,
     save_path: Path,
     mse: float,
-    algorithm: str,
-    n_rounds: int,
-    n_simulations: int,
-    pathos: str,
 ) -> None:
-    """Save the metadata of the simulation."""
-    meta = {
-        "date_time": datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M"),
-        "device": device,
-        "pathos": pathos,
-        "patient": patient,
-        "scenario": scenario,
-        "used_params": selected_params,
-        "SNE method": algorithm,
-        "num_rounds": n_rounds,
-        "num_simulations": n_simulations,
-        "best_simulation_score": mse,
-    }
-    with Path(save_path, "meta.json").open("w") as f:
-        json.dump(meta, f)
+    """Save the metadata of the simulation into a yaml file.
+
+    Parameters
+    ----------
+    config : dict
+        The configuration file as a dictionary.
+    device : str
+        The device used for the simulation.
+    selected_params : list[str]
+        The names of the parameters that were selected for inferrence.
+    save_path : Path
+        The path to save the metadata file.
+    mse : float
+        The mean squared error achieved in the simulation.
+
+    """
+    config_copy = config.copy()
+    config_copy["device"] = device
+    config_copy["selected_params"] = selected_params
+    config_copy["simulation_score"] = mse
+    with Path(save_path, "simulation_config.yaml").open("w") as f:
+        yaml.dump(config_copy, f)
+
+    shutil.copyfile(
+        Path(script_dir / "simulation_configs" / args.config),
+        Path(save_path) / Path("simulation_config.yaml"),
+    )
 
 
 def save_experimental_setup(
@@ -875,17 +881,13 @@ if __name__ == "__main__":
         plt.savefig(Path(save_path, "posterior_samples.png"))
 
     save_meta(
+        config=config,
         device="cuda" if torch.cuda.is_available() else "cpu",
-        pathos="True" if pathos else "False",
         selected_params=prior.params_names,
-        patient=default_settings.patient_name,
-        scenario=default_settings.scenario,
         save_path=save_path,
         mse=mse,
-        algorithm=sbi_settings["algorithm"],
-        n_rounds=sbi_settings["num_rounds"],
-        n_simulations=sbi_settings["num_simulations"],
     )
+
     save_experimental_setup(
         save_path=save_path,
         prior=prior,
@@ -894,9 +896,5 @@ if __name__ == "__main__":
         true_params=true_params,
     )
 
-    shutil.copyfile(
-        Path(script_dir / "simulation_configs" / args.config),
-        Path(save_path) / Path("simulation_config.yaml"),
-    )
     script_logger.info("Parameter inference session completed")
     script_logger.info("_" * 80)

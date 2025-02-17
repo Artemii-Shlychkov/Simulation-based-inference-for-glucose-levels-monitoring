@@ -292,7 +292,6 @@ def prepare_prior(
         If an invalid prior type is provided.
 
     """
-    # script_dir = Path(__file__).parent
     with Path(script_dir / data_file).open("r") as f:
         all_patients_params = json.load(f)
 
