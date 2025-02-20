@@ -41,7 +41,9 @@ def load_results(results_folder: Path) -> Results:
     prior = pickle.load((setup_folder / "priors.pkl").open("rb"))
     true_observation = pickle.load((setup_folder / "true_observation.pkl").open("rb"))
     true_params = pickle.load((setup_folder / "true_params.pkl").open("rb"))
-    posterior_dist = pickle.load((results_folder / "posterior_dist.pkl").open("rb"))
+    posterior_dist = pickle.load(
+        (results_folder / "posterior_distribution.pkl").open("rb")
+    )
     posterior_samples = pickle.load(
         (results_folder / "posterior_samples.pkl").open("rb")
     )
@@ -81,7 +83,7 @@ def plot_simulation(
 
     mean_x_inf = np.mean(x_inferred_array, axis=0)
     std_x_inf = np.std(x_inferred_array, axis=0)
-    timeline = np.arange(x_true_array.shape[1])
+    timeline = np.arange(x_true_array.shape)
 
     fig, ax = plt.subplots(1, 1, figsize=(10, 6))
 
