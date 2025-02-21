@@ -24,3 +24,4 @@
 *sbi-logs/
 *.sh
 results_local/*
+.ipython/
