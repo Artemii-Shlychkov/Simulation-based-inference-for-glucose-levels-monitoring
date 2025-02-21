@@ -566,7 +566,7 @@ if __name__ == "__main__":
         "--config",
         type=str,
         help="The name of the configuration file",
-        default="default_config.yaml",
+        default="test_config.yaml",
     )
 
     parser.add_argument(
