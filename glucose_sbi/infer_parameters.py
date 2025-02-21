@@ -1,22 +1,16 @@
 import argparse
 import logging
 import pickle
-import shutil
-import time
 from collections.abc import Generator
-from copy import deepcopy
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from functools import partial
 from pathlib import Path
 from typing import Callable, Protocol
 
 import matplotlib.pyplot as plt
 import numpy as np
-import seaborn as sns
 import torch
 import yaml
-from pathos.multiprocessing import ProcessingPool as Pool
 from sbi.inference import (
     NPE,
     DirectPosterior,
@@ -27,18 +21,17 @@ from sbi.utils.user_input_checks import (
     process_prior,
     process_simulator,
 )
-from simglucose.actuator.pump import InsulinPump
-from simglucose.controller.basal_bolus_ctrller import BBController
-from simglucose.patient.t1dpatient import T1DPatient
-from simglucose.sensor.cgm import CGMSensor
 from simglucose.simulation.env import T1DSimEnv
-from simglucose.simulation.scenario import CustomScenario
-from simglucose.simulation.sim_engine import SimObj
 from sklearn.metrics import mean_squared_error
 from torch.distributions import Distribution
-from tqdm import tqdm
 
+from glucose_sbi.glucose_simulator import (
+    DeafultSimulationEnv,
+    load_default_simulation_env,
+    run_glucose_simulator,
+)
 from glucose_sbi.prepare_priors import Prior, prepare_prior
+from glucose_sbi.process_results import plot_simulation
 from glucose_sbi.sample_non_negative import sample_non_negative
 
 
@@ -46,17 +39,6 @@ class Posterior(Protocol):
     def sample(
         self, sample_shape: tuple[int, ...], x: torch.Tensor
     ) -> torch.Tensor: ...
-
-
-@dataclass
-class DeafultSimulationEnv:
-    """Dataclass for the default simulation environment."""
-
-    patient_name: str
-    sensor_name: str
-    pump_name: str
-    scenario: list[tuple[int, int]] = field(default_factory=list)
-    hours: int = 24  # hours to simulate
 
 
 def set_up_logging(saving_path: Path) -> logging.Logger:
@@ -125,188 +107,6 @@ def get_patient_params(env: T1DSimEnv, prior: Prior) -> dict:
     return dict(zip(param_names, params))
 
 
-def load_default_simulation_env(
-    env_settings: DeafultSimulationEnv, hours: int = 24
-) -> T1DSimEnv:
-    """Load the default simulation environment.
-
-    Parameters
-    ----------
-    env_settings : DeafultSimulationEnv
-        DataClass object containing the default simulation environment settings.
-    hours : int, optional
-        The number of hours to simulate, by default 24
-
-    Returns
-    -------
-    T1DSimEnv
-        The simulation environment object.
-
-    """
-    now = datetime.now(tz=timezone.utc)
-    start_time = datetime.combine(now.date(), datetime.min.time())
-
-    patient = T1DPatient.withName(env_settings.patient_name)
-    sensor = CGMSensor.withName(env_settings.sensor_name, seed=1)
-    pump = InsulinPump.withName(env_settings.pump_name)
-    scenario = CustomScenario(start_time=start_time, scenario=env_settings.scenario)
-    controller = BBController()
-    env = T1DSimEnv(patient=patient, sensor=sensor, pump=pump, scenario=scenario)
-
-    return SimObj(
-        env=env, controller=controller, sim_time=timedelta(hours=hours), animate=False
-    )
-
-
-def set_custom_params(patient: T1DPatient, theta: torch.Tensor, prior: Prior) -> None:
-    """Apply the custom parameters (used for a particular simulation) for the patient.
-
-    Parameters
-    ----------
-    patient : T1DPatient
-        The patient object
-    theta : torch.Tensor
-        One set of custom paraeters to apply to the patient
-    prior : Prior
-        The prior for the parameters
-        (we need only the names of the parameters that will actually be used in the simulation)
-
-    """
-    theta_copy = deepcopy(theta)
-    custom_params_values = theta_copy.tolist()
-    param_names = prior.params_names
-
-    for i, param in enumerate(param_names):
-        setattr(patient._params, param, custom_params_values[i])  # noqa: SLF001
-
-
-def create_simulation_envs_with_custom_params(
-    theta: torch.Tensor,
-    default_settings: DeafultSimulationEnv,
-    prior: Prior,
-    hours: int = 24,
-) -> list[T1DSimEnv]:
-    """Creates a list of simulation environments with custom parameters.
-
-    Parameters
-    ----------
-    theta : torch.Tensor
-        Sets of custom parameters to use for the simulation of shape (N_sets, N_params)
-    default_settings : DeafultSimulationEnv
-        DataClass object containing the default simulation environment settings.
-    prior : Prior
-        DataClass object containing the prior for the parameters
-    hours : int, optional
-        Duration of simulation, by default 24
-
-    Returns
-    -------
-    list[T1DSimEnv]
-        List of simulation environments with custom parameters
-
-    """
-    default_simulation_env = load_default_simulation_env(
-        hours=hours, env_settings=default_settings
-    )
-    simulation_envs = []
-    for _, theta_i in enumerate(theta):
-        custom_sim_env = deepcopy(default_simulation_env)
-
-        set_custom_params(custom_sim_env.env.patient, theta_i, prior)
-        simulation_envs.append(custom_sim_env)
-
-    return simulation_envs
-
-
-def simulate_glucose_dynamics(simulation_env: T1DSimEnv) -> np.ndarray:
-    """Simulates the glucose dynamics for a given simulation environment.
-
-    Parameters
-    ----------
-    simulation_env : T1DSimEnv
-        The simulation environment object
-
-    Returns
-    -------
-    np.ndarray
-        The glucose dynamics
-
-    """
-    simulation_env.simulate()
-    return simulation_env.results()["CGM"].to_numpy()
-
-
-def simulate_batch(simulations: list[T1DSimEnv], device: torch.device) -> torch.Tensor:
-    """Simulate a batch of simulation environments in parallel.
-
-    Parameters
-    ----------
-    simulations : list[T1DSimEnv]
-        List of simulation environments
-    device : torch.device
-        The device to use for the simulation
-
-    Returns
-    -------
-    torch.Tensor
-        The glucose dynamics for each simulation
-
-    """
-    tic = time.time()
-    pathos = True
-    if pathos:
-        with Pool() as p:
-            script_logger.info("Using pathos for multiprocessing")
-            results = p.map(simulate_glucose_dynamics, simulations)
-    else:
-        script_logger.info("Pathos not available, using standard multiprocessing")
-        results = [simulate_glucose_dynamics(s) for s in tqdm(simulations)]
-    toc = time.time()
-    script_logger.info("Simulation took %s sec.", toc - tic)
-    results = np.stack(results)
-    return torch.from_numpy(results).float().to(device)
-
-
-def run_glucose_simulator(
-    theta: torch.Tensor,
-    default_settings: DeafultSimulationEnv,
-    prior: Prior,
-    device: torch.device,
-    hours: int = 24,
-) -> torch.Tensor:
-    """Run the glucose simulator for a batch of custom parameters.
-
-    Parameters
-    ----------
-    theta : torch.Tensor
-        Sets of custom parameters to use for the simulation of shape (N_sets, N_params)
-    default_settings : DeafultSimulationEnv
-        DataClass object containing the default simulation environment settings.
-    prior : Prior
-        DataClass object containing the priors for the parameters
-    hours : int, optional
-        Duration of the simulation, by default 24
-    device : torch.device, optional
-        Device used to run the simulation, by default torch.device('cpu')
-
-    Returns
-    -------
-    torch.Tensor
-        The glucose dynamics time series for each simulation
-
-    """
-    script_logger.info(
-        "Starting glucose simulator  with theta of shape: %s", theta.shape
-    )
-    simulation_envs = create_simulation_envs_with_custom_params(
-        theta=theta,
-        default_settings=default_settings,
-        prior=prior,
-        hours=hours,
-    )
-    return simulate_batch(simulation_envs, device)
-
-
 def set_up_sbi_simulator(
     prior: Prior,
     default_settings: DeafultSimulationEnv,
@@ -343,6 +143,7 @@ def set_up_sbi_simulator(
         default_settings=default_settings,
         prior=prior,
         device=device,
+        logger=script_logger,
     )
 
     sbi_simulator = process_simulator(
@@ -703,7 +504,8 @@ def save_meta(
     device: str,
     selected_params: list[str],
     save_path: Path,
-    mse: float,
+    mse_simulation: float | str,
+    mse_parametric: float | str,
 ) -> None:
     """Save the metadata of the simulation into a yaml file.
 
@@ -717,21 +519,24 @@ def save_meta(
         The names of the parameters that were selected for inferrence.
     save_path : Path
         The path to save the metadata file.
-    mse : float
+    mse_simulation : float
         The mean squared error achieved in the simulation.
+    mse_parametric : float
+        The mean squared error achieved in the parametric space.
 
     """
     config_copy = config.copy()
     config_copy["device"] = device
     config_copy["selected_params"] = selected_params
-    config_copy["simulation_score"] = mse
+    config_copy["--results"] = {}
+    config_copy["--results"]["mse_simulation"] = (
+        mse_simulation if mse_simulation else None
+    )
+    config_copy["--results"]["mse_parametric"] = (
+        mse_parametric if mse_parametric else None
+    )
     with Path(save_path, "simulation_config.yaml").open("w") as f:
         yaml.dump(config_copy, f)
-
-    shutil.copyfile(
-        Path(script_dir / "simulation_configs" / args.config),
-        Path(save_path) / Path("simulation_config.yaml"),
-    )
 
 
 def save_experimental_setup(
@@ -763,9 +568,18 @@ if __name__ == "__main__":
         help="The name of the configuration file",
         default="default_config.yaml",
     )
+
+    parser.add_argument(
+        "--simulate_with_posterior",
+        action="store_true",
+        help="Simulate with the posterior",
+        default=False,
+    )
+
     parser.add_argument(
         "--plot", action="store_true", help="Plot the results", default=False
     )
+
     args = parser.parse_args()
     script_dir = Path(__file__).resolve().parent
     save_path = set_up_saving_path(script_dir=script_dir)
@@ -835,57 +649,60 @@ if __name__ == "__main__":
         num_samples=sbi_settings["n_samples_from_posterior"],
         true_observation=true_observation,
     )
-
+    # move samples to cpu for better compatibility
+    posterior_samples_cpu = posterior_samples.cpu()
     with Path(save_path, "posterior_samples.pkl").open("wb") as f:
-        pickle.dump(posterior_samples, f)
+        pickle.dump(posterior_samples_cpu, f)
 
-    if args.plot:
+    mse_simulation = "N/A"
+    mse_parametric = "N/A"
+
+    if args.simulate_with_posterior:
+        hours = config["simulate_posterior_hours"]
         glucose_dynamics = run_glucose_simulator(
             theta=posterior_samples,
             default_settings=default_settings,
             prior=prior,
             device=device,
+            hours=hours,
+            logger=script_logger,
         )
         glucose_dynamics_array = glucose_dynamics.cpu().numpy()
+        true_observation_array = true_observation.cpu().numpy()
         mean_glucose_dynamics = np.mean(glucose_dynamics_array, axis=0)
         std_glucose_dynamics = np.std(glucose_dynamics_array, axis=0)
-        mse = mean_squared_error(true_observation.cpu().numpy(), mean_glucose_dynamics)
-        timeline = np.arange(glucose_dynamics.shape[1])
-        fig, ax = plt.subplots(figsize=(10, 6))
-        ax.plot(
-            timeline,
-            mean_glucose_dynamics,
-            label="Mean of simulations a-posteriori",
-            color="black",
-        )
-        ax.fill_between(
-            timeline,
-            mean_glucose_dynamics - std_glucose_dynamics,
-            mean_glucose_dynamics + std_glucose_dynamics,
-            alpha=0.2,
-            color="black",
-        )
-        ax.plot(true_observation.cpu().numpy(), label="True", color="red")
 
-        sns.despine()
-        ax.legend(loc="upper right")
-        ax.set_xlabel("Time, min")
-        ax.set_ylabel("Glucose Dynamics")
-        ax.text(
-            0.1,
-            0.1,
-            f"MSE True vs. Posterior Mean: {mse:.2f}",
-            transform=ax.transAxes,
+        mse_simulation = mean_squared_error(
+            true_observation_array, mean_glucose_dynamics
         )
-        plt.tight_layout()
-        plt.savefig(Path(save_path, "posterior_samples.png"))
+        posterior_samples_array = posterior_samples_cpu.numpy()
+
+        true_params_values = np.array(list(true_params.values()))
+        mse_parametric = mean_squared_error(
+            true_params_values, np.mean(posterior_samples_array, axis=0)
+        )
+
+        # save the glucose dynamics
+        with Path(save_path, "glucose_dynamics.pkl").open("wb") as f:
+            pickle.dump(glucose_dynamics_array, f)
+
+        if args.plot:
+            fig, ax = plot_simulation(
+                x_true=true_observation,
+                x_inferred=glucose_dynamics,
+                config=config,
+                mse=mse_simulation,
+            )
+
+            fig.savefig(Path(save_path, "simulation_results.png"))
 
     save_meta(
         config=config,
         device="cuda" if torch.cuda.is_available() else "cpu",
         selected_params=prior.params_names,
         save_path=save_path,
-        mse=mse,
+        mse_simulation=mse_simulation,
+        mse_parametric=mse_parametric,
     )
 
     save_experimental_setup(

@@ -1,5 +1,7 @@
+import logging
 import time
 from copy import deepcopy
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 import numpy as np
@@ -14,10 +16,20 @@ from simglucose.simulation.scenario import CustomScenario
 from simglucose.simulation.sim_engine import SimObj
 from tqdm import tqdm
 
-from glucose_sbi.infer_parameters import DeafultSimulationEnv
 from glucose_sbi.prepare_priors import Prior
 
 pathos = True
+
+
+@dataclass
+class DeafultSimulationEnv:
+    """Dataclass for the default simulation environment."""
+
+    patient_name: str
+    sensor_name: str
+    pump_name: str
+    scenario: list[tuple[int, int]] = field(default_factory=list)
+    hours: int = 24  # hours to simulate
 
 
 def run_glucose_simulator(
@@ -26,6 +38,7 @@ def run_glucose_simulator(
     prior: Prior,
     device: torch.device,
     hours: int = 24,
+    logger: logging.Logger | None = None,
 ) -> torch.Tensor:
     """Run the glucose simulator for a batch of custom parameters.
 
@@ -40,7 +53,9 @@ def run_glucose_simulator(
     hours : int, optional
         Duration of the simulation, by default 24
     device : torch.device, optional
-        Device used to run the simulation, by default torch.device('cpu')
+        Device used to store the results, by default torch.device("cpu")
+    logger : logging.Logger, optional
+        The logger object, by default None
 
     Returns
     -------
@@ -48,16 +63,22 @@ def run_glucose_simulator(
         The glucose dynamics time series for each simulation
 
     """
+    if logger:
+        logger.info("Running the glucose simulator on theta of shape, %s", theta.shape)
     simulation_envs = create_simulation_envs_with_custom_params(
         theta=theta,
         default_settings=default_settings,
         prior=prior,
         hours=hours,
     )
-    return simulate_batch(simulation_envs, device)
+    return simulate_batch(simulation_envs, device, logger)
 
 
-def simulate_batch(simulations: list[T1DSimEnv], device: torch.device) -> torch.Tensor:
+def simulate_batch(
+    simulations: list[T1DSimEnv],
+    device: torch.device,
+    logger: logging.Logger | None = None,
+) -> torch.Tensor:
     """Simulate a batch of simulation environments in parallel.
 
     Parameters
@@ -65,7 +86,9 @@ def simulate_batch(simulations: list[T1DSimEnv], device: torch.device) -> torch.
     simulations : list[T1DSimEnv]
         List of simulation environments
     device : torch.device
-        The device to use for the simulation
+        The device to store the results on, by default torch.device("cpu")
+    logger : logging.Logger, optional
+        The logger object, by default None
 
     Returns
     -------
@@ -73,16 +96,20 @@ def simulate_batch(simulations: list[T1DSimEnv], device: torch.device) -> torch.
         The glucose dynamics for each simulation
 
     """
-    tic = time.time()
     pathos = True
+    tic = time.time()
     if pathos:
+        if logger:
+            logger.info("Using pathos for parallel processing")
         with Pool() as p:
-            print("Using pathos multiprocessing")
             results = p.map(simulate_glucose_dynamics, simulations)
     else:
         results = [simulate_glucose_dynamics(s) for s in tqdm(simulations)]
-    toc = time.time()
     results = np.stack(results)
+    toc = time.time()
+    if logger:
+        # log in seconds
+        logger.info("Simulation took %s seconds", toc - tic)
     return torch.from_numpy(results).float().to(device)
 
 

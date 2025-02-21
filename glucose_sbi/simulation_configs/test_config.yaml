@@ -28,5 +28,4 @@ sbi_settings:
   num_rounds: 1
   n_samples_from_posterior: 10
   
-
-
+simulate_posterior_hours: 24
