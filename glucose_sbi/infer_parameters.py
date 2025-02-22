@@ -494,7 +494,7 @@ def run_npe(
 
 def set_up_saving_path(script_dir: Path) -> Path:
     """Set up the saving path for the simulation results."""
-    date_time = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d_%H-%M")
+    date_time = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
     saving_path = Path(script_dir / "results" / date_time)
     saving_path.mkdir(parents=True, exist_ok=True)
     return saving_path
@@ -595,7 +595,7 @@ if __name__ == "__main__":
     config = load_config(script_dir, args.config)
 
     device = set_up_device()
-
+    def_hours = 24
     pathos = True
     sbi_settings: dict = config["sbi_settings"]
     default_settings = DeafultSimulationEnv(
@@ -661,7 +661,7 @@ if __name__ == "__main__":
 
     if args.simulate_with_posterior:
         hours = config["simulate_posterior_hours"]
-        glucose_dynamics = run_glucose_simulator(
+        glucose_dynamics_inferred = run_glucose_simulator(
             theta=posterior_samples,
             default_settings=default_settings,
             inferred_params=prior,
@@ -669,13 +669,19 @@ if __name__ == "__main__":
             hours=hours,
             logger=script_logger,
         )
+        if hours != def_hours:
+            true_observation, _ = get_true_observation(
+                prior=prior, env_settings=default_settings, hours=hours
+            )
         # save the glucose dynamics
-        torch.save(glucose_dynamics, Path(save_path, "inferred_glucose_dynamics.pt"))
+        torch.save(
+            glucose_dynamics_inferred, Path(save_path, "inferred_glucose_dynamics.pt")
+        )
 
-        glucose_dynamics_array = glucose_dynamics.cpu().numpy()
+        inferred_dynamics_array = glucose_dynamics_inferred.cpu().numpy()
         true_observation_array = true_observation.cpu().numpy()
-        mean_glucose_dynamics = np.mean(glucose_dynamics_array, axis=0)
-        std_glucose_dynamics = np.std(glucose_dynamics_array, axis=0)
+        mean_glucose_dynamics = np.mean(inferred_dynamics_array, axis=0)
+        std_glucose_dynamics = np.std(inferred_dynamics_array, axis=0)
 
         mse_simulation = mean_squared_error(
             true_observation_array, mean_glucose_dynamics
@@ -689,7 +695,7 @@ if __name__ == "__main__":
         if args.plot:
             fig, ax = plot_simulation(
                 x_true=true_observation,
-                x_inferred=glucose_dynamics,
+                x_inferred=inferred_dynamics_array,
                 config=config,
                 mse=mse_simulation,
             )
