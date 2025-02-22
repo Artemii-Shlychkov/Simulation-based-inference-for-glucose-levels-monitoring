@@ -1,3 +1,4 @@
+import json
 import pickle
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,27 +12,38 @@ from matplotlib import ticker
 from sbi.inference import DirectPosterior
 
 from glucose_sbi.glucose_simulator import DeafultSimulationEnv, run_glucose_simulator
-from glucose_sbi.prepare_priors import Prior
+from glucose_sbi.prepare_priors import InferredParams, Prior
 
 
 @dataclass
 class Results:
     default_settings: DeafultSimulationEnv
-    prior: Prior
+    inferred_params: InferredParams
     true_observation: torch.Tensor
     true_params: dict
-    posterior_dist: DirectPosterior
     posterior_samples: torch.Tensor
     config: dict
+    prior: Prior | None = None
+    posterior_distribution: DirectPosterior | None = None
 
 
-def load_results(results_folder: Path) -> Results:
+def load_results(
+    results_folder: Path,
+    device: str = "cpu",
+    *,
+    load_distributions: bool = False,
+) -> Results:
     """Load results of a particular parameter inference experiment.
 
     Parameters
     ----------
     results_folder : Path
         The folder containing the results of the parameter inference experiment.
+    device : str, optional
+        The device used in the simulator runner, by default "cpu"
+    load_distributions : bool, optional
+        If True, the posterior distribution and prior will be loaded, by default False
+        WARNING: Loading distributions with weights_only set to False. Only do this if the source is trusted.
 
     Returns
     -------
@@ -39,29 +51,64 @@ def load_results(results_folder: Path) -> Results:
         A dataclass containing the results of the parameter inference experiment.
 
     """
-    setup_folder = results_folder / "Experimental Setup"
-    default_settings = pickle.load((setup_folder / "default_settings.pkl").open("rb"))
-    prior = pickle.load((setup_folder / "priors.pkl").open("rb"))
-    true_observation = pickle.load((setup_folder / "true_observation.pkl").open("rb"))
-    true_params = pickle.load((setup_folder / "true_params.pkl").open("rb"))
-    posterior_dist = pickle.load(
-        (results_folder / "posterior_distribution.pkl").open("rb")
-    )
-    posterior_samples = pickle.load(
-        (results_folder / "posterior_samples.pkl").open("rb")
+    post_samples = torch.load(
+        results_folder / "posterior_samples.pt", map_location=device
     )
 
-    # find and load the yaml file
-    config_file = Path.glob(results_folder, "*.yaml")
-    config = yaml.safe_load(next(config_file).open("r"))
+    with Path(
+        results_folder / "Experimental Setup" / "inferred_params.json"
+    ).open() as f:
+        inferred_params = json.load(f)
+
+    inferred_params = InferredParams(params_names=inferred_params)
+
+    true_obs = torch.load(
+        results_folder / "Experimental Setup" / "true_observation.pt",
+        map_location=device,
+    )
+
+    with Path(results_folder / "Experimental Setup" / "true_params.json").open() as f:
+        true_params = json.load(f)
+
+    with Path(
+        results_folder / "Experimental Setup" / "default_settings.json"
+    ).open() as f:
+        defaut_sim_env_dict = json.load(f)
+    defaut_sim_env = DeafultSimulationEnv(**defaut_sim_env_dict)
+
+    with Path(results_folder / "simulation_config.yaml").open() as f:
+        sim_config = yaml.safe_load(f)
+
+    if load_distributions:
+        posterior_dist = torch.load(
+            results_folder / "posterior_distribution.pt",
+            map_location=device,
+            weights_only=False,
+        )
+        prior = torch.load(
+            results_folder / "Experimental Setup" / "prior.pt",
+            map_location=device,
+            weights_only=False,
+        )
+
+        return Results(
+            default_settings=defaut_sim_env,
+            inferred_params=inferred_params,
+            true_observation=true_obs,
+            true_params=true_params,
+            posterior_samples=post_samples,
+            config=sim_config,
+            prior=prior,
+            posterior_distribution=posterior_dist,
+        )
+
     return Results(
-        default_settings,
-        prior,
-        true_observation,
-        true_params,
-        posterior_dist,
-        posterior_samples,
-        config,
+        default_settings=defaut_sim_env,
+        inferred_params=inferred_params,
+        true_observation=true_obs,
+        true_params=true_params,
+        posterior_samples=post_samples,
+        config=sim_config,
     )
 
 
@@ -88,21 +135,20 @@ def simulate_true_and_inferred(
     posterior_samples = results.posterior_samples
     true_parameters = results.true_params
     default_settings = results.default_settings
-    prior = results.prior
     theta_true = torch.tensor(
         [value for _, value in true_parameters.items()]
     ).unsqueeze(0)
     sim_true = run_glucose_simulator(
         theta=theta_true,
         default_settings=default_settings,
-        prior=prior,
+        inferred_params=results.inferred_params,
         device=device,
         hours=hours,
     )
     sim_inferred = run_glucose_simulator(
         theta=posterior_samples,
         default_settings=default_settings,
-        prior=prior,
+        inferred_params=results.inferred_params,
         device=device,
         hours=hours,
     )
@@ -198,9 +244,48 @@ def plot_simulation(
 
     if config:
         sbi_settings = config["sbi_settings"]
+        n_params = config["prior_settings"]["number_of_params"]
         ax.set_title(
-            f"{config['patient_name']}\n{sbi_settings['algorithm']} - {sbi_settings['num_rounds']} round(s) - {sbi_settings['num_simulations']} simulations"
+            f"{config['patient_name']} - {n_params} inferred parameters\n{sbi_settings['algorithm']} - {sbi_settings['num_rounds']} round(s) - {sbi_settings['num_simulations']} simulations"
         )
     sns.despine()
     plt.tight_layout()
     return fig, ax
+
+
+def load_results_pickle(results_folder: Path) -> Results:
+    """Load results of a particular parameter inference experiment.
+    This function is being deprecated in favor of `load_results` and is compatible with results untill 2025-02-17 only.
+    Parameters.
+    ----------
+    results_folder : Path
+        The folder containing the results of the parameter inference experiment.
+
+    Returns
+    -------
+    Results
+        A dataclass containing the results of the parameter inference experiment.
+
+    """
+    setup_folder = results_folder / "Experimental Setup"
+    default_settings = pickle.load((setup_folder / "default_settings.pkl").open("rb"))
+    prior = pickle.load((setup_folder / "priors.pkl").open("rb"))
+    true_observation = pickle.load((setup_folder / "true_observation.pkl").open("rb"))
+    true_params = pickle.load((setup_folder / "true_params.pkl").open("rb"))
+    posterior_samples = pickle.load(
+        (results_folder / "posterior_samples.pkl").open("rb")
+    )
+    inferred_params = InferredParams(params_names=prior.params_names)
+
+    # find and load the yaml file
+    config_file = Path.glob(results_folder, "*.yaml")
+    config = yaml.safe_load(next(config_file).open("r"))
+    return Results(
+        default_settings=default_settings,
+        inferred_params=inferred_params,
+        true_observation=true_observation,
+        true_params=true_params,
+        posterior_samples=posterior_samples,
+        config=config,
+        prior=prior,
+    )

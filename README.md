@@ -1,4 +1,4 @@
-# Parameter Inference for Glucose Simulation
+# Parameter Inference for Glucose Simulation: `glucose_sbi` package
 ## Requirements
 
 ### Dependencies

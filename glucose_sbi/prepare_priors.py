@@ -6,21 +6,26 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from sbi.utils.torchutils import BoxUniform
+from sbi.utils import BoxUniform
 from torch.distributions import (
     Distribution,
     ExpTransform,
     MultivariateNormal,
     TransformedDistribution,
+    Uniform,
 )
 
 logger = logging.getLogger("sbi_logger")
 
 
 @dataclass
-class Prior:
-    type: str
+class InferredParams:
     params_names: list[str]
+
+
+@dataclass
+class Prior(InferredParams):
+    type: str
     params_prior_distribution: (
         Distribution | BoxUniform | MultivariateNormal | TransformedDistribution
     )
@@ -142,7 +147,8 @@ def construct_lognormal_prior(
 
     # Ensure data > 0. (If any zero or negative, either raise an error or fix them.)
     if not np.all(data_array > 0):
-        raise ValueError("All data values must be strictly > 0 for log transform.")
+        m = "All data values must be strictly > 0 for log transform."
+        raise ValueError(m)
 
     # 2) Move to log-space: shape still (n_params, n_samples).
     log_data = np.log(data_array)
@@ -183,8 +189,8 @@ def construct_lognormal_prior(
 
 def construct_box_uniform_prior(
     data: dict, device: torch.device, inflation_factor: float = 1.0
-) -> Prior:
-    """Given some observed values for patient parameters, constructs a multivariate normal distribution, then optionally expands the range by `inflation_factor`.
+) -> Uniform:
+    """Given some observed values for patient parameters, constructs a multivariate uniform distribution, then optionally expands the range by `inflation_factor`.
 
     Parameters
     ----------
@@ -199,7 +205,7 @@ def construct_box_uniform_prior(
     -------
     Prior
         A dataclass holding:
-            - type='BoxUniform'
+            - type='Uniform'
             - params_names: the list of parameter names in `data_file`
             - params_prior_distribution: the resulting BoxUniform distribution
 
@@ -262,6 +268,8 @@ def prepare_prior(
 
     Parameters
     ----------
+    script_dir : Path
+        path to the directory containing the data_file.
     data_file : str
         path to a json file containing the patient parameters.
         data_file is expected to have structure: {param_name: [val_patient1, val_patient2, ...], ...} or {param_name: {Mean: val, Std: val}, ...}
