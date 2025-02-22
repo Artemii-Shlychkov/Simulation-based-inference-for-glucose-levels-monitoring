@@ -7,7 +7,7 @@ env:
   PYTHON_VERSION: "3.10.12"
 jobs:
   Run-tests:
-    runs-on: [self-hosted, linux, x64, ubuntu-latest]
+    runs-on: [ubuntu-latest]
     steps:
       - name: Checkout
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
