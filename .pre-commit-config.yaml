@@ -1,0 +1,60 @@
+repos:
+-   repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+    -   id: check-added-large-files
+    -   id: check-case-conflict
+    -   id: check-json
+    -   id: check-merge-conflict
+    -   id: check-symlinks
+    -   id: check-toml
+    -   id: check-yaml
+    -   id: debug-statements
+    -   id: destroyed-symlinks
+    -   id: detect-private-key
+    -   id: end-of-file-fixer
+    -   id: mixed-line-ending
+    -   id: requirements-txt-fixer
+    -   id: trailing-whitespace
+    -   id: forbid-submodules
+    -   id: name-tests-test
+        args: ['--pytest-test-first']
+    -   id: check-illegal-windows-names
+    -   id: check-executables-have-shebangs
+-   repo: https://github.com/astral-sh/ruff-pre-commit
+    # Ruff version.
+    rev: v0.9.7
+    hooks:
+      # Run the linter.
+    -   id: ruff
+        args: [--fix]
+      # Run the formatter.
+    -   id: ruff-format
+-   repo: https://github.com/codespell-project/codespell
+    rev: v2.4.1
+    hooks:
+    -   id: codespell
+        args: ['--write-changes', '--ignore-words=.codespell_words']
+        exclude: "checklists/static/jquery-3.7.1.min.js"
+-   repo: https://github.com/python-jsonschema/check-jsonschema
+    rev: 0.31.1
+    hooks:
+      - id: check-github-workflows
+        args: ["--verbose"]
+      - id: check-github-actions
+        args: ["--verbose"]
+      - id: check-dependabot
+        args: ["--verbose"]
+-   repo: local
+    hooks:
+    -   id: mypy
+        name: mypy
+        entry: mypy
+        require_serial: true
+        language: system
+        types: [python]
+        args: ["--cache-dir", ".mypy_cache", "--config-file", "pyproject.toml"]
+-   repo: https://gitlab.com/vojko.pribudic.foss/pre-commit-update
+    rev: v0.6.1
+    hooks:
+    -   id: pre-commit-update
