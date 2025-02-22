@@ -1,7 +1,8 @@
 import argparse
+import json
 import logging
-import pickle
 from collections.abc import Generator
+from dataclasses import asdict
 from datetime import datetime, timezone
 from functools import partial
 from pathlib import Path
@@ -30,7 +31,7 @@ from glucose_sbi.glucose_simulator import (
     load_default_simulation_env,
     run_glucose_simulator,
 )
-from glucose_sbi.prepare_priors import Prior, prepare_prior
+from glucose_sbi.prepare_priors import InferredParams, Prior, prepare_prior
 from glucose_sbi.process_results import plot_simulation
 from glucose_sbi.sample_non_negative import sample_non_negative
 
@@ -141,7 +142,7 @@ def set_up_sbi_simulator(
     wrapper = partial(
         glucose_simulator,
         default_settings=default_settings,
-        prior=prior,
+        inferred_params=prior,
         device=device,
         logger=script_logger,
     )
@@ -493,7 +494,7 @@ def run_npe(
 
 def set_up_saving_path(script_dir: Path) -> Path:
     """Set up the saving path for the simulation results."""
-    date_time = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d_%H-%M")
+    date_time = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
     saving_path = Path(script_dir / "results" / date_time)
     saving_path.mkdir(parents=True, exist_ok=True)
     return saving_path
@@ -549,14 +550,19 @@ def save_experimental_setup(
     """Save the experimental setup."""
     folder = save_path / "Experimental Setup"
     folder.mkdir(parents=True, exist_ok=True)
-    with Path(folder, "priors.pkl").open("wb") as f:
-        pickle.dump(prior, f)
-    with Path(folder, "default_settings.pkl").open("wb") as f:
-        pickle.dump(default_settings, f)
-    with Path(folder, "true_observation.pkl").open("wb") as f:
-        pickle.dump(true_observation, f)
-    with Path(folder, "true_params.pkl").open("wb") as f:
-        pickle.dump(true_params, f)
+
+    torch.save(prior, Path(folder, "prior.pt"))
+
+    with Path(folder, "inferred_params.json").open("w") as f:
+        json.dump(prior.params_names, f)
+
+    torch.save(true_observation, Path(folder, "true_observation.pt"))
+
+    with Path(folder, "true_params.json").open("w") as f:
+        json.dump(true_params, f)
+
+    with Path(folder, "default_settings.json").open("w") as f:
+        json.dump(asdict(default_settings), f)
 
 
 if __name__ == "__main__":
@@ -589,7 +595,7 @@ if __name__ == "__main__":
     config = load_config(script_dir, args.config)
 
     device = set_up_device()
-
+    def_hours = 24
     pathos = True
     sbi_settings: dict = config["sbi_settings"]
     default_settings = DeafultSimulationEnv(
@@ -640,56 +646,56 @@ if __name__ == "__main__":
         num_rounds=sbi_settings["num_rounds"],
         num_simulations=sbi_settings["num_simulations"],
     )
-
-    with Path(save_path, "posterior_distribution.pkl").open("wb") as f:
-        pickle.dump(posterior_distribution, f)
+    torch.save(posterior_distribution, Path(save_path, "posterior_distribution.pt"))
 
     posterior_samples = sample_non_negative(
         posterior_distribution,
         num_samples=sbi_settings["n_samples_from_posterior"],
         true_observation=true_observation,
     )
-    # move samples to cpu for better compatibility
-    posterior_samples_cpu = posterior_samples.cpu()
-    with Path(save_path, "posterior_samples.pkl").open("wb") as f:
-        pickle.dump(posterior_samples_cpu, f)
+
+    torch.save(posterior_samples, Path(save_path, "posterior_samples.pt"))
 
     mse_simulation = "N/A"
     mse_parametric = "N/A"
 
     if args.simulate_with_posterior:
         hours = config["simulate_posterior_hours"]
-        glucose_dynamics = run_glucose_simulator(
+        glucose_dynamics_inferred = run_glucose_simulator(
             theta=posterior_samples,
             default_settings=default_settings,
-            prior=prior,
+            inferred_params=prior,
             device=device,
             hours=hours,
             logger=script_logger,
         )
-        glucose_dynamics_array = glucose_dynamics.cpu().numpy()
+        if hours != def_hours:
+            true_observation, _ = get_true_observation(
+                prior=prior, env_settings=default_settings, hours=hours
+            )
+        # save the glucose dynamics
+        torch.save(
+            glucose_dynamics_inferred, Path(save_path, "inferred_glucose_dynamics.pt")
+        )
+
+        inferred_dynamics_array = glucose_dynamics_inferred.cpu().numpy()
         true_observation_array = true_observation.cpu().numpy()
-        mean_glucose_dynamics = np.mean(glucose_dynamics_array, axis=0)
-        std_glucose_dynamics = np.std(glucose_dynamics_array, axis=0)
+        mean_glucose_dynamics = np.mean(inferred_dynamics_array, axis=0)
+        std_glucose_dynamics = np.std(inferred_dynamics_array, axis=0)
 
         mse_simulation = mean_squared_error(
             true_observation_array, mean_glucose_dynamics
         )
-        posterior_samples_array = posterior_samples_cpu.numpy()
-
+        posterior_samples_array = posterior_samples.cpu().numpy()
         true_params_values = np.array(list(true_params.values()))
         mse_parametric = mean_squared_error(
             true_params_values, np.mean(posterior_samples_array, axis=0)
         )
 
-        # save the glucose dynamics
-        with Path(save_path, "glucose_dynamics.pkl").open("wb") as f:
-            pickle.dump(glucose_dynamics_array, f)
-
         if args.plot:
             fig, ax = plot_simulation(
                 x_true=true_observation,
-                x_inferred=glucose_dynamics,
+                x_inferred=inferred_dynamics_array,
                 config=config,
                 mse=mse_simulation,
             )

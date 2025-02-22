@@ -16,7 +16,7 @@ from simglucose.simulation.scenario import CustomScenario
 from simglucose.simulation.sim_engine import SimObj
 from tqdm import tqdm
 
-from glucose_sbi.prepare_priors import Prior
+from glucose_sbi.prepare_priors import InferredParams
 
 pathos = True
 
@@ -35,7 +35,7 @@ class DeafultSimulationEnv:
 def run_glucose_simulator(
     theta: torch.Tensor,
     default_settings: DeafultSimulationEnv,
-    prior: Prior,
+    inferred_params: InferredParams,
     device: torch.device,
     hours: int = 24,
     logger: logging.Logger | None = None,
@@ -48,8 +48,8 @@ def run_glucose_simulator(
         Sets of custom parameters to use for the simulation of shape (N_sets, N_params)
     default_settings : DeafultSimulationEnv
         DataClass object containing the default simulation environment settings.
-    prior : Prior
-        DataClass object containing the priors for the parameters
+    inferred_params : InferredParams
+        DataClass object containing the names of inferred parameters
     hours : int, optional
         Duration of the simulation, by default 24
     device : torch.device, optional
@@ -68,7 +68,7 @@ def run_glucose_simulator(
     simulation_envs = create_simulation_envs_with_custom_params(
         theta=theta,
         default_settings=default_settings,
-        prior=prior,
+        inferred_params=inferred_params,
         hours=hours,
     )
     return simulate_batch(simulation_envs, device, logger)
@@ -134,7 +134,7 @@ def simulate_glucose_dynamics(simulation_env: T1DSimEnv) -> np.ndarray:
 def create_simulation_envs_with_custom_params(
     theta: torch.Tensor,
     default_settings: DeafultSimulationEnv,
-    prior: Prior,
+    inferred_params: InferredParams,
     hours: int = 24,
 ) -> list[T1DSimEnv]:
     """Creates a list of simulation environments with custom parameters.
@@ -145,8 +145,8 @@ def create_simulation_envs_with_custom_params(
         Sets of custom parameters to use for the simulation of shape (N_sets, N_params)
     default_settings : DeafultSimulationEnv
         DataClass object containing the default simulation environment settings.
-    prior : Prior
-        DataClass object containing the prior for the parameters
+    inferred_params : InferredParams
+        DataClass object containing the names of inferred parameters
     hours : int, optional
         Duration of simulation, by default 24
 
@@ -163,13 +163,15 @@ def create_simulation_envs_with_custom_params(
     for _, theta_i in enumerate(theta):
         custom_sim_env = deepcopy(default_simulation_env)
 
-        set_custom_params(custom_sim_env.env.patient, theta_i, prior)
+        set_custom_params(custom_sim_env.env.patient, theta_i, inferred_params)
         simulation_envs.append(custom_sim_env)
 
     return simulation_envs
 
 
-def set_custom_params(patient: T1DPatient, theta: torch.Tensor, prior: Prior) -> None:
+def set_custom_params(
+    patient: T1DPatient, theta: torch.Tensor, inferred_params: InferredParams
+) -> None:
     """Apply the custom parameters (used for a particular simulation) for the patient.
 
     Parameters
@@ -178,14 +180,13 @@ def set_custom_params(patient: T1DPatient, theta: torch.Tensor, prior: Prior) ->
         The patient object
     theta : torch.Tensor
         One set of custom paraeters to apply to the patient
-    prior : Prior
-        The prior for the parameters
-        (we need only the names of the parameters that will actually be used in the simulation)
+    inferred_params : InferredParams
+        DataClass object containing the names of inferred parameters
 
     """
     theta_copy = deepcopy(theta)
     custom_params_values = theta_copy.tolist()
-    param_names = prior.params_names
+    param_names = inferred_params.params_names
 
     for i, param in enumerate(param_names):
         setattr(patient._params, param, custom_params_values[i])  # noqa: SLF001
