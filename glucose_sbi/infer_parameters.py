@@ -31,7 +31,7 @@ from glucose_sbi.glucose_simulator import (
     load_default_simulation_env,
     run_glucose_simulator,
 )
-from glucose_sbi.prepare_priors import InferredParams, Prior, prepare_prior
+from glucose_sbi.prepare_priors import Prior, prepare_prior
 from glucose_sbi.process_results import plot_simulation
 from glucose_sbi.sample_non_negative import sample_non_negative
 

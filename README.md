@@ -42,7 +42,7 @@ python script.py --config test_config.yaml --simulate_with_posterior --plot
 ```
 
 ## Configuration
-The script uses a configuration YAML file specifying the prior distributions, simulation settings, and inference parameters. The configuration file must be located in a folder `simulation_configs` in the package root. 
+The script uses a configuration YAML file specifying the prior distributions, simulation settings, and inference parameters. The configuration file must be located in a folder `simulation_configs` in the package root.
 Refer to a `test_config.yaml` for an example
 
 
@@ -59,7 +59,7 @@ The script logs all operations in `results/<timestamp>/inference_execution.log`.
 
 # Module `prepare_priors`
 
-The prepare_priors.py script is responsible for constructing and managing prior distributions for parameter inference, based on some domain knowledge like the range of parameter values or their mean / std. 
+The prepare_priors.py script is responsible for constructing and managing prior distributions for parameter inference, based on some domain knowledge like the range of parameter values or their mean / std.
 Available data to date is extracted from the simglucose "patients" and stored in the `all_sg_patients_params_values.json`. Based on this data, the module provides functions to:
 
 - Select a random subset of patient parameters for inference.
@@ -82,7 +82,3 @@ The process_results.py script is responsible for loading, processing, and visual
 
 # Module `glucose_simulator`
 This module contains logic to run simglucose simulations with given sets of patient parameters (theta), different from default ones.
-
-
-
-
