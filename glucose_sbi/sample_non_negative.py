@@ -28,14 +28,16 @@ class DirectPosteriorNonnegative(DirectPosterior):
 
     def sample(
         self,
-        sample_shape: torch.Size = torch.Size(),
+        sample_shape: torch.Size | None = None,
         x: torch.Tensor | None = None,
         max_sampling_batch_size: int = 10_000,
         sample_with: str | None = None,
         *,
         show_progress_bars: bool = False,
     ) -> torch.Tensor:
-        num_samples = torch.Size(sample_shape).numel()
+        if sample_shape is None:
+            sample_shape = torch.Size()
+        num_samples = sample_shape.numel()
         x = self._x_else_default_x(x)
         x = reshape_to_batch_event(
             x, event_shape=self.posterior_estimator.condition_shape
