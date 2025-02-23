@@ -255,7 +255,7 @@ def plot_simulation(
 
 def load_results_pickle(results_folder: Path) -> Results:
     """Load results of a particular parameter inference experiment.
-    This function is being deprecated in favor of `load_results` and is compatible with results untill 2025-02-17 only.
+    This function is being deprecated in favor of `load_results` and is compatible with results until 2025-02-17 only.
     Parameters.
     ----------
     results_folder : Path

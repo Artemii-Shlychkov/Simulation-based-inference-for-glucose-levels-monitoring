@@ -517,7 +517,7 @@ def save_meta(
     device : str
         The device used for the simulation.
     selected_params : list[str]
-        The names of the parameters that were selected for inferrence.
+        The names of the parameters that were selected for inference.
     save_path : Path
         The path to save the metadata file.
     mse_simulation : float

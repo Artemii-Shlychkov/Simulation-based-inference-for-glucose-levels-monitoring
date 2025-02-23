@@ -179,7 +179,7 @@ def set_custom_params(
     patient : T1DPatient
         The patient object
     theta : torch.Tensor
-        One set of custom paraeters to apply to the patient
+        One set of custom parameters to apply to the patient
     inferred_params : InferredParams
         DataClass object containing the names of inferred parameters
 
