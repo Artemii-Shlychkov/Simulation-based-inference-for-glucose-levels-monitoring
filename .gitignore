@@ -25,3 +25,5 @@
 *.sh
 results_local/*
 .ipython/
+.mypy_cache/
+.ruff_cache/

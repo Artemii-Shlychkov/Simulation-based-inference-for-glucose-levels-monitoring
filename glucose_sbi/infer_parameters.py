@@ -265,6 +265,7 @@ def sample_from_posterior(
         The posterior samples.
 
     """
+    script_logger.info("Sampling from the posterior distribution...")
     if only_non_negative:
         return sample_non_negative(
             posterior, num_samples=num_samples, true_observation=torch.tensor(x_true)
@@ -648,19 +649,34 @@ if __name__ == "__main__":
     )
     torch.save(posterior_distribution, Path(save_path, "posterior_distribution.pt"))
 
+    script_logger.info("Sampling from the posterior distribution...")
     posterior_samples = sample_non_negative(
         posterior_distribution,
         num_samples=sbi_settings["n_samples_from_posterior"],
         true_observation=true_observation,
+        logger=script_logger,
     )
 
     torch.save(posterior_samples, Path(save_path, "posterior_samples.pt"))
+
+    save_experimental_setup(
+        save_path=save_path,
+        prior=prior,
+        default_settings=default_settings,
+        true_observation=true_observation,
+        true_params=true_params,
+    )
 
     mse_simulation = "N/A"
     mse_parametric = "N/A"
 
     if args.simulate_with_posterior:
-        hours = config["simulate_posterior_hours"]
+        hours = config.get("simulate_posterior_hours", def_hours)
+        script_logger.info(
+            "Simulating with %s samples from the posterior for %s hours",
+            posterior_samples.shape[0],
+            hours,
+        )
         glucose_dynamics_inferred = run_glucose_simulator(
             theta=posterior_samples,
             default_settings=default_settings,
@@ -709,14 +725,6 @@ if __name__ == "__main__":
         save_path=save_path,
         mse_simulation=mse_simulation,
         mse_parametric=mse_parametric,
-    )
-
-    save_experimental_setup(
-        save_path=save_path,
-        prior=prior,
-        default_settings=default_settings,
-        true_observation=true_observation,
-        true_params=true_params,
     )
 
     script_logger.info("Parameter inference session completed")

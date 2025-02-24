@@ -1,3 +1,5 @@
+import logging
+
 import torch
 from sbi.inference import DirectPosterior
 from sbi.neural_nets.estimators.shape_handling import reshape_to_batch_event
@@ -86,6 +88,7 @@ def sample_non_negative(
     posterior: DirectPosterior,
     num_samples: int,
     true_observation: torch.Tensor | None = None,
+    logger: logging.Logger | None = None,
 ) -> torch.Tensor:
     """Sample from a posterior, ensuring all samples are nonnegative.
 
@@ -97,6 +100,8 @@ def sample_non_negative(
         The number of samples to draw.
     true_observation : torch.Tensor
         The true observation.
+    logger: logging.Logger
+        The logger to log the progress.
 
     Returns
     -------
@@ -111,7 +116,22 @@ def sample_non_negative(
         max_sampling_batch_size=posterior.max_sampling_batch_size,
         device=posterior._device,  # noqa: SLF001
     )
-    sample_size = torch.Size([num_samples])
 
     # Sample from the custom DirectPosterior subclass:
-    return post_nonneg.sample((sample_size), x=true_observation)
+    collected: list[torch.Tensor] = []
+    while len(collected) < num_samples:
+        samples = post_nonneg.sample(
+            sample_shape=torch.Size([num_samples - len(collected)]),
+            x=true_observation,
+            show_progress_bars=True,
+        )
+        collected.append(samples)
+
+        # report every 10% of the samples
+        if logger:
+            step = num_samples // 10
+            if len(collected) % step == 0:
+                pct_complete = len(collected) / num_samples * 100
+                logger.info("Collected %s %% of positive samples", pct_complete)
+
+    return torch.cat(collected, dim=0)[:num_samples]
