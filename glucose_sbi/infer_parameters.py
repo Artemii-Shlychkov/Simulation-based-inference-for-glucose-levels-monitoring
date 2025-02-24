@@ -26,6 +26,7 @@ from simglucose.simulation.env import T1DSimEnv
 from sklearn.metrics import mean_squared_error
 from torch.distributions import Distribution
 
+from glucose_sbi.check_config import check_config
 from glucose_sbi.glucose_simulator import (
     DeafultSimulationEnv,
     load_default_simulation_env,
@@ -413,7 +414,7 @@ def apt(
     for r in range(num_rounds):
         script_logger.info("Running round %s of %s", r + 1, num_rounds)
 
-        theta = proposal.sample((num_simulations,))
+        theta = sample_positive(proposal, num_simulations)
         x = simulator(theta)
         theta = theta.to(device)
         x = x.to(device)
@@ -589,22 +590,33 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     script_dir = Path(__file__).resolve().parent
+
     save_path = set_up_saving_path(script_dir=script_dir)
     script_logger = set_up_logging(saving_path=save_path)
     script_logger.info("Starting the parameter inference session")
-
     config = load_config(script_dir, args.config)
+    check_config(config_file=Path(script_dir / "simulation_configs" / args.config))
+
+    def_scenario = [[7, 45], [12, 70], [16, 15], [18, 80], [23, 10]]
+    def_hours = 24
+    def_sbi_settings: dict = {
+        "algorithm": "BayesFlow",
+        "num_simulations": 1000,
+        "num_rounds": 1,
+        "n_samples_from_posterior": 100,
+    }
 
     device = set_up_device()
-    def_hours = 24
+
     pathos = True
-    sbi_settings: dict = config["sbi_settings"]
+    sbi_settings: dict = config.get("sbi_settings", def_sbi_settings)
+
     default_settings = DeafultSimulationEnv(
-        patient_name=config["patient_name"],
-        sensor_name=config["sensor_name"],
-        pump_name=config["pump_name"],
-        scenario=config["scenario"],
-        hours=config["hours"],
+        patient_name=config.get("patient_name", "adolescent#001"),
+        sensor_name=config.get("sensor_name", "Dexcom"),
+        pump_name=config.get("pump_name", "Insulet"),
+        scenario=config.get("scenario", def_scenario),
+        hours=config.get("hours", def_hours),
     )
 
     prior_settings: dict = config["prior_settings"]
