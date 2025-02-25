@@ -120,4 +120,6 @@ def sample_non_negative(
     sample_size = torch.Size([num_samples])
 
     # Sample from the custom DirectPosterior subclass:
-    return post_nonneg.sample((sample_size), x=true_observation)
+    return post_nonneg.sample(
+        (sample_size), x=true_observation, show_progress_bars=True
+    )
