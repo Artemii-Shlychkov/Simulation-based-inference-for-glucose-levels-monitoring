@@ -117,21 +117,7 @@ def sample_non_negative(
         device=posterior._device,  # noqa: SLF001
     )
 
+    sample_size = torch.Size([num_samples])
+
     # Sample from the custom DirectPosterior subclass:
-    collected: list[torch.Tensor] = []
-    while len(collected) < num_samples:
-        samples = post_nonneg.sample(
-            sample_shape=torch.Size([num_samples - len(collected)]),
-            x=true_observation,
-            show_progress_bars=True,
-        )
-        collected.append(samples)
-
-        # report every 10% of the samples
-        if logger:
-            step = num_samples // 10
-            if len(collected) % step == 0:
-                pct_complete = len(collected) / num_samples * 100
-                logger.info("Collected %s %% of positive samples", pct_complete)
-
-    return torch.cat(collected, dim=0)[:num_samples]
+    return post_nonneg.sample((sample_size), x=true_observation)
