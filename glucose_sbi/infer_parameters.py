@@ -204,7 +204,7 @@ def positive_sample_generator(
 
     """
     while True:
-        sample = distribution.sample()
+        sample = distribution.sample((1,))
         if torch.all(sample > 0):
             yield sample
 
@@ -236,7 +236,7 @@ def sample_positive(distribution: Distribution, num_samples: int) -> torch.Tenso
             pct_complete = len(collected) / num_samples * 100
             script_logger.info("Collected %s %% of positive samples", pct_complete)
 
-    return torch.stack(collected)
+    return torch.cat(collected, dim=0)
 
 
 def sample_from_posterior(
@@ -273,7 +273,7 @@ def sample_from_posterior(
         )
     return posterior.sample(
         sample_shape=(num_samples,),
-        x=torch.tensor(x_true, dtype=torch.float32, device=device),
+        x=torch.tensor(x_true, device=device),
     )
 
 
@@ -648,6 +648,14 @@ if __name__ == "__main__":
         plt.plot(true_observation.to("cpu").numpy())
         plt.savefig(Path(save_path, "true_observation.png"))
 
+    save_experimental_setup(
+        save_path=save_path,
+        prior=prior,
+        default_settings=default_settings,
+        true_observation=true_observation,
+        true_params=true_params,
+    )
+
     sbi_settings = config["sbi_settings"]
     posterior_distribution = run_npe(
         algorithm=sbi_settings["algorithm"],
@@ -670,14 +678,6 @@ if __name__ == "__main__":
     )
 
     torch.save(posterior_samples, Path(save_path, "posterior_samples.pt"))
-
-    save_experimental_setup(
-        save_path=save_path,
-        prior=prior,
-        default_settings=default_settings,
-        true_observation=true_observation,
-        true_params=true_params,
-    )
 
     mse_simulation = "N/A"
     mse_parametric = "N/A"
