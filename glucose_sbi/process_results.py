@@ -164,8 +164,8 @@ def simulate_true_and_inferred(
 def plot_simulation(
     x_true: torch.Tensor | np.ndarray,
     x_inferred: torch.Tensor | np.ndarray,
-    config: dict | None,
-    mse: float | str = "N/A",
+    config: dict | None = None,
+    mse: float | None = None,
 ) -> tuple[plt.Figure, plt.Axes]:
     """Plot the results of a simulation.
 
@@ -222,7 +222,8 @@ def plot_simulation(
         alpha=0.3,
         label="Standard deviation",
     )
-    ax.scatter([0], [0], alpha=0, label=f"MSE = {mse:.2f}") if mse else None
+    mse_text = f"{mse:.2f}" if mse else "N/A"
+    ax.scatter([0], [0], alpha=0, label=mse_text)
     # set major ticks as hours and minor ticks as half-hours
     ax.set_xticks(
         timeline[::60]

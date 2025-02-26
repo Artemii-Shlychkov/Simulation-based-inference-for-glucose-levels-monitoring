@@ -1,4 +1,5 @@
 import argparse
+import inspect
 import json
 import logging
 from collections.abc import Generator
@@ -12,10 +13,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import yaml
-from sbi.inference import (
-    NPE,
-    DirectPosterior,
-)
+from sbi.inference import NPE, SNPE, DirectPosterior
 from sbi.utils import RestrictedPrior, get_density_thresholder
 from sbi.utils.user_input_checks import (
     check_sbi_inputs,
@@ -189,6 +187,7 @@ def get_true_observation(
 
 def positive_sample_generator(
     distribution: Distribution,
+    x_true: torch.Tensor | None = None,
 ) -> Generator[torch.Tensor, None, None]:
     """Generates all-positive samples from a distribution that has a `sample` method.
 
@@ -196,6 +195,8 @@ def positive_sample_generator(
     ----------
     distribution : Distribution | Posterior
         The distribution to sample from.
+    x_true : torch.Tensor, optional
+        The true observation to compare the inference results to, by default None
 
     Yields
     ------
@@ -203,13 +204,23 @@ def positive_sample_generator(
         The generated sample.
 
     """
+    # Only pass arguments that are supported
+    sample_params = inspect.signature(distribution.sample).parameters
+    kwargs = {}
+    if "show_progress_bars" in sample_params:
+        kwargs["show_progress_bars"] = False  # or another appropriate value
+    if "x" in sample_params and x_true:
+        kwargs["x"] = x_true  # Only pass x_true if it is provided
+
     while True:
-        sample = distribution.sample((1,))
+        sample = distribution.sample((1,), **kwargs)
         if torch.all(sample > 0):
             yield sample
 
 
-def sample_positive(distribution: Distribution, num_samples: int) -> torch.Tensor:
+def sample_positive(
+    distribution: Distribution, num_samples: int, x_true: torch.Tensor | None = None
+) -> torch.Tensor:
     """Samples positive values from a distribution.
 
     Parameters
@@ -218,6 +229,8 @@ def sample_positive(distribution: Distribution, num_samples: int) -> torch.Tenso
         The distribution to sample from.
     num_samples : int
         The number of samples to generate.
+    x_true : torch.Tensor, optional
+        The true observation to compare the inference results to, by default None
 
     Returns
     -------
@@ -225,7 +238,7 @@ def sample_positive(distribution: Distribution, num_samples: int) -> torch.Tenso
         The tensor of positive samples of shape (num_samples, num_params)
 
     """
-    gen = positive_sample_generator(distribution)
+    gen = positive_sample_generator(distribution, x_true)
     collected: list[torch.Tensor] = []
 
     while len(collected) < num_samples:
@@ -234,7 +247,7 @@ def sample_positive(distribution: Distribution, num_samples: int) -> torch.Tenso
         step = num_samples // 10
         if len(collected) % step == 0:
             pct_complete = len(collected) / num_samples * 100
-            script_logger.info("Collected %s %% of positive samples", pct_complete)
+            script_logger.info("Collected %s of positive samples", pct_complete)
 
     return torch.cat(collected, dim=0)
 
@@ -347,7 +360,7 @@ def tsnpe(
         "Running TSNPE inference on prior of shape: %s", prior.event_shape
     )
 
-    inference = NPE(prior=prior, device=device)
+    inference = SNPE(prior=prior, device=device)
     proposal = prior
     for r in range(num_rounds):
         script_logger.info("Running round %s of %s", r + 1, num_rounds)
@@ -407,7 +420,7 @@ def apt(
     """
     script_logger.info("Running APT inference on prior of shape: %s", prior.event_shape)
 
-    inference = NPE(prior=prior, device=device)
+    inference = SNPE(prior=prior, device=device)
 
     proposal = prior  # start with prior
 
@@ -670,13 +683,12 @@ if __name__ == "__main__":
     torch.save(posterior_distribution, Path(save_path, "posterior_distribution.pt"))
 
     script_logger.info("Sampling from the posterior distribution...")
-    posterior_samples = sample_non_negative(
+
+    posterior_samples = sample_positive(
         posterior_distribution,
         num_samples=sbi_settings["n_samples_from_posterior"],
-        true_observation=true_observation,
-        logger=script_logger,
+        x_true=true_observation,
     )
-
     torch.save(posterior_samples, Path(save_path, "posterior_samples.pt"))
 
     mse_simulation = "N/A"
