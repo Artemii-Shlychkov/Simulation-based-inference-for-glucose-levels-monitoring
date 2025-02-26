@@ -7,7 +7,7 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from functools import partial
 from pathlib import Path
-from typing import Callable, Protocol
+from typing import Any, Callable, Protocol
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -186,7 +186,7 @@ def get_true_observation(
 
 
 def positive_sample_generator(
-    distribution: Distribution,
+    distribution: Distribution | Posterior,
     x_true: torch.Tensor | None = None,
 ) -> Generator[torch.Tensor, None, None]:
     """Generates all-positive samples from a distribution that has a `sample` method.
@@ -206,10 +206,10 @@ def positive_sample_generator(
     """
     # Only pass arguments that are supported
     sample_params = inspect.signature(distribution.sample).parameters
-    kwargs = {}
+    kwargs: dict[str, Any] = {}
     if "show_progress_bars" in sample_params:
         kwargs["show_progress_bars"] = False  # or another appropriate value
-    if "x" in sample_params and x_true:
+    if "x" in sample_params:
         kwargs["x"] = x_true  # Only pass x_true if it is provided
 
     while True:
@@ -219,7 +219,9 @@ def positive_sample_generator(
 
 
 def sample_positive(
-    distribution: Distribution, num_samples: int, x_true: torch.Tensor | None = None
+    distribution: Distribution | Posterior,
+    num_samples: int,
+    x_true: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Samples positive values from a distribution.
 
@@ -691,7 +693,6 @@ if __name__ == "__main__":
     )
     torch.save(posterior_samples, Path(save_path, "posterior_samples.pt"))
 
-    mse_simulation = "N/A"
     mse_parametric = "N/A"
 
     if args.simulate_with_posterior:
