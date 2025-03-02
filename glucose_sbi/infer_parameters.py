@@ -2,12 +2,11 @@ import argparse
 import inspect
 import json
 import logging
-from collections.abc import Generator
 from dataclasses import asdict
 from datetime import datetime, timezone
 from functools import partial
 from pathlib import Path
-from typing import Any, Callable, Protocol
+from typing import Callable, Protocol
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -32,7 +31,6 @@ from glucose_sbi.glucose_simulator import (
 )
 from glucose_sbi.prepare_priors import Prior, prepare_prior
 from glucose_sbi.process_results import plot_simulation
-from glucose_sbi.sample_non_negative import sample_non_negative
 
 
 class Posterior(Protocol):
@@ -185,111 +183,63 @@ def get_true_observation(
     return true_observation, true_params
 
 
-def positive_sample_generator(
-    distribution: Distribution | Posterior,
-    x_true: torch.Tensor | None = None,
-) -> Generator[torch.Tensor, None, None]:
-    """Generates all-positive samples from a distribution that has a `sample` method.
-
-    Parameters
-    ----------
-    distribution : Distribution | Posterior
-        The distribution to sample from.
-    x_true : torch.Tensor, optional
-        The true observation to compare the inference results to, by default None
-
-    Yields
-    ------
-    Generator[torch.Tensor, None, None]
-        The generated sample.
-
-    """
-    # Only pass arguments that are supported
-    sample_params = inspect.signature(distribution.sample).parameters
-    kwargs: dict[str, Any] = {}
-    if "show_progress_bars" in sample_params:
-        kwargs["show_progress_bars"] = False  # or another appropriate value
-    if "x" in sample_params:
-        kwargs["x"] = x_true  # Only pass x_true if it is provided
-
-    while True:
-        sample = distribution.sample((1,), **kwargs)
-        if torch.all(sample > 0):
-            yield sample
-
-
 def sample_positive(
-    distribution: Distribution | Posterior,
+    distribution: Distribution | DirectPosterior,
     num_samples: int,
     x_true: torch.Tensor | None = None,
+    batch_size: int | None = None,  # Adjustable batch size for efficiency
 ) -> torch.Tensor:
-    """Samples positive values from a distribution.
+    """Samples positive values from a distribution using batch processing.
 
     Parameters
     ----------
-    distribution : Distribution | Posterior
+    distribution : Distribution | DirectPosterior
         The distribution to sample from.
     num_samples : int
-        The number of samples to generate.
+        The number of positive samples to generate.
     x_true : torch.Tensor, optional
-        The true observation to compare the inference results to, by default None
+        The conditioning observation, if applicable.
+    batch_size : int, optional
+        The number of samples to draw in each batch to improve efficiency.
 
     Returns
     -------
     torch.Tensor
-        The tensor of positive samples of shape (num_samples, num_params)
+        The tensor of positive samples of shape (num_samples, num_params).
 
     """
-    gen = positive_sample_generator(distribution, x_true)
-    collected: list[torch.Tensor] = []
+    if not batch_size:
+        batch_size = num_samples // 10
 
-    while len(collected) < num_samples:
-        collected.append(next(gen))
-        # report every 10% of the samples
-        step = num_samples // 10
-        if len(collected) % step == 0:
-            pct_complete = len(collected) / num_samples * 100
-            script_logger.info("Collected %s of positive samples", pct_complete)
+    collected = []
+    # Determine if x should be passed
+    sample_params = inspect.signature(distribution.sample).parameters
+    kwargs = {"x": x_true} if "x" in sample_params else {}
 
-    return torch.cat(collected, dim=0)
+    total_collected = 0.0
+    last_logged_pct = 0.0
 
+    while total_collected < num_samples:
+        # Sample in batches
+        batch_samples = distribution.sample((batch_size,), **kwargs)
 
-def sample_from_posterior(
-    posterior: Posterior,
-    x_true: np.ndarray,
-    num_samples: int = 1000,
-    *,
-    only_non_negative: bool = True,
-) -> torch.Tensor:
-    """Sample from the posterior distribution.
+        # Vectorized filtering of positive samples
+        positive_samples = batch_samples[torch.all(batch_samples > 0, dim=1)]
 
-    Parameters
-    ----------
-    posterior : Distribution
-        The posterior distribution of the parameters.
-    x_true : np.ndarray
-        The true observation to compare the inference results to.
-    num_samples : int, optional
-        number of required samples, by default 1000
-    only_non_negative : bool, optional
-        Whether to sample only non-negative parameters, by default True
-        If true, will call the sample_non_negative function from glucose_sbi.sample_non_negative script
+        collected.append(positive_samples)
+        total_collected = sum(t.shape[0] for t in collected)
 
-    Returns
-    -------
-    torch.Tensor
-        The posterior samples.
+        # Compute progress percentage
+        pct_complete = min(total_collected / num_samples * 100, 100)
 
-    """
-    script_logger.info("Sampling from the posterior distribution...")
-    if only_non_negative:
-        return sample_non_negative(
-            posterior, num_samples=num_samples, true_observation=torch.tensor(x_true)
-        )
-    return posterior.sample(
-        sample_shape=(num_samples,),
-        x=torch.tensor(x_true, device=device),
-    )
+        # Log only if at least 10% more progress is made
+        milestone = 10.0
+        if pct_complete - last_logged_pct >= milestone:
+            script_logger.info("Collected %.2f%% of positive samples", pct_complete)
+            last_logged_pct = pct_complete  # Update last logged percentage
+
+    # Concatenate and return exactly num_samples
+    return torch.cat(collected, dim=0)[:num_samples]
 
 
 def bayes_flow(
@@ -329,7 +279,7 @@ def tsnpe(
     simulator: Callable,
     true_observation: torch.Tensor,
     device: torch.device,
-    sampling_method: str,
+    sample_proposal_with: str = "rejection",
     num_rounds: int = 10,
     num_simulations: int = 1000,
 ) -> DirectPosterior:
@@ -346,7 +296,9 @@ def tsnpe(
     device : torch.device
         The device to use for the simulation.
     sampling_method : str
-        The sampling method to use.
+        The sampling method to use in `build_posterior` method.
+    sample_proposal_with : str, optional
+        The sampling method to sample from the proposal distribution, by default "rejection"
     num_rounds : int, optional
         number  of inference rounds, by default 10
     num_simulations : int, optional
@@ -375,15 +327,17 @@ def tsnpe(
         x = x.to(device)
 
         _ = inference.append_simulations(theta, x).train(force_first_round_loss=True)
-        posterior = inference.build_posterior().set_default_x(true_observation)
+        posterior = inference.build_posterior(sample_with="direct").set_default_x(
+            true_observation
+        )
 
         accept_reject_fn = get_density_thresholder(posterior, quantile=1e-4)
         proposal = RestrictedPrior(
             prior,
             accept_reject_fn,
-            sample_with=sampling_method,
+            sample_with=sample_proposal_with,
             device=device,
-            posterior=posterior if sampling_method == "sir" else None,
+            posterior=posterior if sample_proposal_with == "sir" else None,
         )
 
     return posterior
@@ -394,6 +348,7 @@ def apt(
     simulator: Callable,
     true_observation: torch.Tensor,
     device: torch.device,
+    sampling_method: str = "mcmc",
     num_rounds: int = 10,
     num_simulations: int = 1000,
 ) -> DirectPosterior:
@@ -409,6 +364,8 @@ def apt(
         The true observation to compare the inference results to.
     device : torch.device
         The device to use for the simulation.
+    sampling_method : str, optional
+        The sampling method to use in `build_posterior` method, by default "direct"
     num_rounds : int, optional
         number of inference rounds, by default 10
     num_simulations : int, optional
@@ -436,7 +393,9 @@ def apt(
 
         _ = inference.append_simulations(theta, x, proposal=proposal).train()
 
-        posterior_dist = inference.build_posterior().set_default_x(true_observation)
+        posterior_dist = inference.build_posterior(
+            sample_with=sampling_method
+        ).set_default_x(true_observation)
 
         proposal = posterior_dist
 
@@ -448,6 +407,7 @@ def run_npe(
     true_observation: torch.Tensor,
     prior: Prior,
     sampling_method: str,
+    sampling_proposal_with: str,
     simulator: Callable,
     device: torch.device,
     num_rounds: int = 10,
@@ -464,7 +424,9 @@ def run_npe(
     prior : Prior
         DataClass object containing the priors for the parameters.
     sampling_method : str
-        The sampling method to use.
+        The sampling method to use in `build_posterior` method.
+    sampling_proposal_with : str
+        The sampling method to sample from the proposal distribution (TSNPE only).
     simulator : Callable
         The simulator function that generates the data.
     device : torch.device
@@ -487,7 +449,7 @@ def run_npe(
             prior=prior_distribution,
             simulator=simulator,
             device=device,
-            sampling_method=sampling_method,
+            sample_proposal_with=sampling_proposal_with,
             num_rounds=num_rounds,
             num_simulations=num_simulations,
             true_observation=true_observation,
@@ -497,6 +459,7 @@ def run_npe(
             prior=prior_distribution,
             simulator=simulator,
             device=device,
+            sampling_method=sampling_method,
             true_observation=true_observation,
             num_rounds=num_rounds,
             num_simulations=num_simulations,
@@ -522,8 +485,8 @@ def save_meta(
     device: str,
     selected_params: list[str],
     save_path: Path,
-    mse_simulation: float | str,
-    mse_parametric: float | str,
+    mse_simulation: float | None,
+    mse_parametric: float | None,
 ) -> None:
     """Save the metadata of the simulation into a yaml file.
 
@@ -532,6 +495,7 @@ def save_meta(
     config : dict
         The configuration file as a dictionary.
     device : str
+        device used for computations
         The device used for the simulation.
     selected_params : list[str]
         The names of the parameters that were selected for inference.
@@ -547,12 +511,8 @@ def save_meta(
     config_copy["device"] = device
     config_copy["selected_params"] = selected_params
     config_copy["--results"] = {}
-    config_copy["--results"]["mse_simulation"] = (
-        mse_simulation if mse_simulation else None
-    )
-    config_copy["--results"]["mse_parametric"] = (
-        mse_parametric if mse_parametric else None
-    )
+    config_copy["--results"]["mse_simulation"] = mse_simulation
+    config_copy["--results"]["mse_parametric"] = mse_parametric
     with Path(save_path, "simulation_config.yaml").open("w") as f:
         yaml.dump(config_copy, f)
 
@@ -677,7 +637,8 @@ if __name__ == "__main__":
         simulator=sbi_simulator,
         true_observation=true_observation,
         prior=prior,
-        sampling_method=sbi_settings["sampling_method"],
+        sampling_method=sbi_settings.get("sampling_method", "direct"),
+        sampling_proposal_with=sbi_settings.get("sampling_proposal_with", "rejection"),
         device=device,
         num_rounds=sbi_settings["num_rounds"],
         num_simulations=sbi_settings["num_simulations"],
@@ -691,9 +652,11 @@ if __name__ == "__main__":
         num_samples=sbi_settings["n_samples_from_posterior"],
         x_true=true_observation,
     )
+
     torch.save(posterior_samples, Path(save_path, "posterior_samples.pt"))
 
-    mse_parametric = "N/A"
+    mse_parametric = None
+    mse_simulation = None
 
     if args.simulate_with_posterior:
         hours = config.get("simulate_posterior_hours", def_hours)
