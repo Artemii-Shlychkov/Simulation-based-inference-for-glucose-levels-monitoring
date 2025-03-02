@@ -254,6 +254,52 @@ def plot_simulation(
     return fig, ax
 
 
+def plot_meals(
+    true_scenario: list[tuple[int, int]], inferred_scenario: np.ndarray
+) -> tuple[plt.Figure, plt.Axes]:
+    """Plot the inferred vs true meal sizes.
+
+    Parameters
+    ----------
+    true_scenario : list[tuple[int, int]]
+        The true meal sizes
+    inferred_scenario : np.ndarray
+        The inferred meal sizes
+
+    Returns
+    -------
+    tuple[plt.Figure, plt.Axes]
+        The figure and axes objects
+
+    """
+    fig, ax = plt.subplots(figsize=(10, 6))
+    meal_times = [meal[0] for meal in true_scenario]
+    ax.scatter(*zip(*true_scenario), color="green", label="True meal size")
+
+    ax.errorbar(
+        meal_times,
+        inferred_scenario.mean(axis=0),
+        yerr=inferred_scenario.std(axis=0),
+        fmt="o",
+        color="red",
+        capsize=5,
+        label="Inferred meal size",
+    )
+
+    ax.legend()
+
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Meal size")
+    ax.set_xlim(0, 24)
+    ax.set_xticks(np.arange(0, 25, 2))
+    ax.set_xticks(np.arange(0, 25, 1), minor=True)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    plt.title("Inferred vs True meal sizes")
+    plt.tight_layout()
+    return fig, ax
+
+
 def load_results_pickle(results_folder: Path) -> Results:
     """Load results of a particular parameter inference experiment.
     This function is being deprecated in favor of `load_results` and is compatible with results until 2025-02-17 only.

@@ -262,6 +262,8 @@ def prepare_prior(
     number_of_params: int,
     inflation_factor: float,
     mean_shift: float,
+    *,
+    infer_meal_params: bool = False,
     device: torch.device,
 ) -> Prior:
     """Creates a prior distribution from the known parameters of the simglucose patients.
@@ -285,6 +287,8 @@ def prepare_prior(
         amount to shift the mean vector by. Only used for the mvn prior.
     device : torch.device
         device to store the tensors on.
+    infer_meal_params : bool, optional
+        If True, the meal parameters are inferred as well, by default False
 
     Returns
     -------
@@ -323,6 +327,11 @@ def prepare_prior(
             ),
         )
     if prior_type == "uniform":
+        if infer_meal_params:
+            meal_dict = {f"meal_{time}": [1, 100] for time in [7, 12, 16, 18, 23]}
+            selected_data.update(meal_dict)
+            selected_params.extend(meal_dict.keys())
+
         return Prior(
             type="uniform",
             params_names=selected_params,

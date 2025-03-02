@@ -2,6 +2,7 @@ import argparse
 import inspect
 import json
 import logging
+import random
 from dataclasses import asdict
 from datetime import datetime, timezone
 from functools import partial
@@ -30,13 +31,24 @@ from glucose_sbi.glucose_simulator import (
     run_glucose_simulator,
 )
 from glucose_sbi.prepare_priors import Prior, prepare_prior
-from glucose_sbi.process_results import plot_simulation
+from glucose_sbi.process_results import plot_meals, plot_simulation
 
 
 class Posterior(Protocol):
     def sample(
         self, sample_shape: tuple[int, ...], x: torch.Tensor
     ) -> torch.Tensor: ...
+
+
+def _random_scenario() -> list[tuple[int, int]]:
+    """Generate a random scenario."""
+    return [
+        (7, random.randint(1, 100)),
+        (12, random.randint(1, 100)),
+        (16, random.randint(1, 100)),
+        (18, random.randint(1, 100)),
+        (23, random.randint(1, 100)),
+    ]
 
 
 def set_up_logging(saving_path: Path) -> logging.Logger:
@@ -98,6 +110,10 @@ def get_patient_params(env: T1DSimEnv, prior: Prior) -> dict:
 
     """
     param_names = prior.params_names
+
+    # exclude meal parameters
+    param_names = [param for param in param_names if "meal" not in param]
+
     params = [
         getattr(env.env.patient._params, param)  # noqa: SLF001
         for param in param_names
@@ -105,11 +121,18 @@ def get_patient_params(env: T1DSimEnv, prior: Prior) -> dict:
     return dict(zip(param_names, params))
 
 
+def _check_prior_for_meals(prior: Prior) -> bool:
+    """Check if the prior contains meal parameters."""
+    return any("meal" in param for param in prior.params_names)
+
+
 def set_up_sbi_simulator(
     prior: Prior,
     default_settings: DeafultSimulationEnv,
-    device: torch.device,
     glucose_simulator: Callable[..., torch.Tensor],
+    *,
+    device: torch.device,
+    infer_meal_params: bool = False,
 ) -> Callable:
     """Sets up and checks the simulator for the Sequential Bayesian Inference (SBI) framework.
 
@@ -125,6 +148,8 @@ def set_up_sbi_simulator(
         Function that runs the glucose simulator, by default run_glucose_simulator
     processed_priors : Distribution, optional
         Processed priors for the parameters, by default None
+    infer_meal_params : bool, optional
+        Whether to infer meal parameters, by default False
 
     Returns
     -------
@@ -132,6 +157,11 @@ def set_up_sbi_simulator(
         The SBI simulator function used to infer the parameters
 
     """
+    if infer_meal_params and not _check_prior_for_meals(prior):
+        script_logger.warning(
+            "The prior distribution is missing meal parameters despite infer_meal_params being True"
+        )
+
     processed_priors, _, _ = process_prior(prior.params_prior_distribution)
     script_logger.info(
         "Using prior distribution of shape: %s", processed_priors.event_shape
@@ -142,6 +172,7 @@ def set_up_sbi_simulator(
         inferred_params=prior,
         device=device,
         logger=script_logger,
+        infer_meal_params=infer_meal_params,
     )
 
     sbi_simulator = process_simulator(
@@ -586,11 +617,12 @@ if __name__ == "__main__":
     pathos = True
     sbi_settings: dict = config.get("sbi_settings", def_sbi_settings)
 
+    random_scenario = _random_scenario()
     default_settings = DeafultSimulationEnv(
         patient_name=config.get("patient_name", "adolescent#001"),
         sensor_name=config.get("sensor_name", "Dexcom"),
         pump_name=config.get("pump_name", "Insulet"),
-        scenario=config.get("scenario", def_scenario),
+        scenario=random_scenario,
         hours=config.get("hours", def_hours),
     )
 
@@ -598,11 +630,12 @@ if __name__ == "__main__":
     prior: Prior = prepare_prior(
         script_dir=script_dir,
         data_file=prior_settings["priors_data_file"],
-        prior_type=prior_settings["prior_type"],
-        number_of_params=prior_settings["number_of_params"],
-        inflation_factor=prior_settings["inflation_factor"],
-        mean_shift=prior_settings["mean_shift"],
+        prior_type=prior_settings.get("prior_type", "uniform"),
+        number_of_params=prior_settings.get("number_of_params", 10),
+        inflation_factor=prior_settings.get("inflation_factor", 1.0),
+        mean_shift=prior_settings.get("mean_shift", 0.0),
         device=device,
+        infer_meal_params=prior_settings.get("infer_meal_params", False),
     )
     script_logger.info(
         "Constructed prior distribution of type: %s, shape: %s",
@@ -691,11 +724,16 @@ if __name__ == "__main__":
             true_observation_array, mean_glucose_dynamics
         )
         posterior_samples_array = posterior_samples.cpu().numpy()
-        true_params_values = np.array(list(true_params.values()))
-        mse_parametric = mean_squared_error(
-            true_params_values, np.mean(posterior_samples_array, axis=0)
-        )
 
+        try:
+            true_params_values = np.array(
+                list(true_params.values()) + [random_scenario[i][1] for i in range(5)]
+            )
+            mse_parametric = mean_squared_error(
+                true_params_values, np.mean(posterior_samples_array, axis=0)
+            )
+        except ValueError:
+            script_logger.warning("Could not calculate MSE in the parametric space")
         if args.plot:
             fig, ax = plot_simulation(
                 x_true=true_observation,
@@ -705,7 +743,14 @@ if __name__ == "__main__":
             )
 
             fig.savefig(Path(save_path, "simulation_results.png"))
+            true_scenario = default_settings.scenario
+            inferred_scenario = posterior_samples_array[:, -5:]
 
+            fig, ax = plot_meals(
+                true_scenario=true_scenario,
+                inferred_scenario=inferred_scenario,
+            )
+            fig.savefig(Path(save_path, "meal_results.png"))
     save_meta(
         config=config,
         device="cuda" if torch.cuda.is_available() else "cpu",

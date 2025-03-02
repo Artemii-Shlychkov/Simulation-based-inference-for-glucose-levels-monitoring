@@ -36,8 +36,10 @@ def run_glucose_simulator(
     theta: torch.Tensor,
     default_settings: DeafultSimulationEnv,
     inferred_params: InferredParams,
-    device: torch.device,
     hours: int = 24,
+    *,
+    device: torch.device,
+    infer_meal_params: bool = False,
     logger: logging.Logger | None = None,
 ) -> torch.Tensor:
     """Run the glucose simulator for a batch of custom parameters.
@@ -56,6 +58,8 @@ def run_glucose_simulator(
         Device used to store the results, by default torch.device("cpu")
     logger : logging.Logger, optional
         The logger object, by default None
+    infer_meal_params : bool, optional
+        Whether to infer meal parameters, by default False
 
     Returns
     -------
@@ -69,6 +73,7 @@ def run_glucose_simulator(
         theta=theta,
         default_settings=default_settings,
         inferred_params=inferred_params,
+        infer_meal_params=infer_meal_params,
         hours=hours,
     )
     return simulate_batch(simulation_envs, device, logger)
@@ -136,6 +141,8 @@ def create_simulation_envs_with_custom_params(
     default_settings: DeafultSimulationEnv,
     inferred_params: InferredParams,
     hours: int = 24,
+    *,
+    infer_meal_params: bool = False,
 ) -> list[T1DSimEnv]:
     """Creates a list of simulation environments with custom parameters.
 
@@ -149,6 +156,8 @@ def create_simulation_envs_with_custom_params(
         DataClass object containing the names of inferred parameters
     hours : int, optional
         Duration of simulation, by default 24
+    infer_meal_params : bool, optional
+        Whether to infer meal parameters, by default False
 
     Returns
     -------
@@ -163,33 +172,87 @@ def create_simulation_envs_with_custom_params(
     for _, theta_i in enumerate(theta):
         custom_sim_env = deepcopy(default_simulation_env)
 
-        set_custom_params(custom_sim_env.env.patient, theta_i, inferred_params)
+        set_custom_params(
+            custom_sim_env,
+            theta_i,
+            inferred_params,
+            infer_meal_params=infer_meal_params,
+        )
         simulation_envs.append(custom_sim_env)
 
     return simulation_envs
 
 
 def set_custom_params(
-    patient: T1DPatient, theta: torch.Tensor, inferred_params: InferredParams
+    default_simulation_env: T1DSimEnv,
+    theta: torch.Tensor,
+    inferred_params: InferredParams,
+    *,
+    infer_meal_params: bool = False,
 ) -> None:
     """Apply the custom parameters (used for a particular simulation) for the patient.
 
     Parameters
     ----------
-    patient : T1DPatient
-        The patient object
+    default_simulation_env : DefaultSimulationEnv
+        The simulation environment containing the patient and scenario.
     theta : torch.Tensor
-        One set of custom parameters to apply to the patient
+        One set of custom parameters to apply to the patient.
     inferred_params : InferredParams
-        DataClass object containing the names of inferred parameters
+        DataClass object containing the names of inferred parameters.
+    infer_meal_params : bool, optional
+        Whether to infer meal parameters, by default False
 
     """
-    theta_copy = deepcopy(theta)
-    custom_params_values = theta_copy.tolist()
+    theta_list = theta.clone().tolist()
     param_names = inferred_params.params_names
+    patient = default_simulation_env.env.patient
 
-    for i, param in enumerate(param_names):
-        setattr(patient._params, param, custom_params_values[i])  # noqa: SLF001
+    # Separate meal and non-meal parameters
+    meal_indices, meal_values, other_params, other_values = _separate_parameters(
+        param_names, theta_list
+    )
+
+    if infer_meal_params and meal_indices:
+        # Update meal parameters in the scenario
+        _update_meal_parameters(
+            default_simulation_env.env.scenario.scenario, meal_values
+        )
+
+    # Update other parameters in the patient
+    _update_patient_parameters(patient, other_params, other_values)
+
+
+def _separate_parameters(
+    param_names: list[str], theta_list: list[float]
+) -> tuple[list[int], list[float], list[str], list[float]]:
+    """Separate meal and non-meal parameters."""
+    meal_indices = [i for i, param in enumerate(param_names) if "meal" in param]
+    meal_values = [theta_list[i] for i in meal_indices]
+
+    non_meal_indices_and_params = [
+        (i, param) for i, param in enumerate(param_names) if "meal" not in param
+    ]
+    other_params = [param for _, param in non_meal_indices_and_params]
+    other_values = [theta_list[i] for i, _ in non_meal_indices_and_params]
+
+    return meal_indices, meal_values, other_params, other_values
+
+
+def _update_meal_parameters(
+    scenario: list[tuple[str, float]], meal_values: list[float]
+) -> None:
+    """Update meal parameters in the scenario."""
+    for i, (meal_name, _) in enumerate(scenario):
+        scenario[i] = (meal_name, meal_values[i])
+
+
+def _update_patient_parameters(
+    patient: T1DPatient, params: list[str], values: list[float]
+) -> None:
+    """Update non-meal parameters in the patient."""
+    for param, value in zip(params, values):
+        setattr(patient._params, param, value)  # noqa: SLF001
 
 
 def load_default_simulation_env(
