@@ -185,7 +185,10 @@ def set_up_sbi_simulator(
 
 
 def get_true_observation(
-    prior: Prior, env_settings: DeafultSimulationEnv, hours: int = 24
+    prior: Prior,
+    env_settings: DeafultSimulationEnv,
+    hours: int = 24,
+    device: str = "cuda",
 ) -> tuple[torch.Tensor, dict]:
     """Returns the single glucose dynamcis simulation from the default simulation environment parameters and these parameters.
 
@@ -313,6 +316,7 @@ def tsnpe(
     sample_proposal_with: str = "rejection",
     num_rounds: int = 10,
     num_simulations: int = 1000,
+    script_logger: logging.Logger | None = None,
 ) -> DirectPosterior:
     """Runs the Truncated Sequential Neural Posterior Estimation (TSNPE) algorithm.
 
@@ -350,7 +354,10 @@ def tsnpe(
     for r in range(num_rounds):
         script_logger.info("Running round %s of %s", r + 1, num_rounds)
 
-        theta = sample_positive(proposal, num_simulations)
+        theta = sample_positive(
+            proposal,
+            num_simulations,
+        )
         script_logger.info("Simulating theta of shape: %s", theta.shape)
         x = simulator(theta)
         # Optional sanity check: ensure on same device
@@ -358,9 +365,7 @@ def tsnpe(
         x = x.to(device)
 
         _ = inference.append_simulations(theta, x).train(force_first_round_loss=True)
-        posterior = inference.build_posterior(sample_with="direct").set_default_x(
-            true_observation
-        )
+        posterior = inference.build_posterior().set_default_x(true_observation)
 
         accept_reject_fn = get_density_thresholder(posterior, quantile=1e-4)
         proposal = RestrictedPrior(
@@ -671,7 +676,7 @@ if __name__ == "__main__":
         true_observation=true_observation,
         prior=prior,
         sampling_method=sbi_settings.get("sampling_method", "direct"),
-        sampling_proposal_with=sbi_settings.get("sampling_proposal_with", "rejection"),
+        sampling_proposal_with=sbi_settings.get("sample_proposal_with", "rejection"),
         device=device,
         num_rounds=sbi_settings["num_rounds"],
         num_simulations=sbi_settings["num_simulations"],

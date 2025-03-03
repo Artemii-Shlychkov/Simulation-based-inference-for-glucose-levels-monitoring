@@ -30,7 +30,10 @@ prior_settings:
 
 sbi_settings:
   algorithm: TSNPE # BayesFlow, TSNPE or APT
-  sampling_method: 'sir' # 'sir' or 'rejection'; Only used in TSNPE
+  sampling_method: 'direct' # ['direct' | 'mcmc' | 'importance' | 'vi']
+  sample_proposal_with: 'sir' # only used in TSNPE ['rejection' | 'sir']
   num_simulations: 15000 # Number of samples from a prior distribution to generate the training data
   num_rounds: 5 # Rounds of sequential NPE. Only used in TSNPE or APT
   n_samples_from_posterior: 1000 # Number of samples from the posterior distribution
+
+simulate_posterior_hours: 24

@@ -15,17 +15,27 @@ scenario:
 hours: 24
 
 prior_settings:
+  # file with prior parameters in form of a dictionary:
+  # {param_name: [mean, std]} or {param_name: [min, max]} or {param_name: [value_1, value_2, ...]}
   priors_data_file: "all_sg_patients_params_values.json"
-  inflation_factor: 1
-  mean_shift: 0
-  prior_type: 'mvn'
+
+  inflation_factor: 1.5 # expands the uniform prior or the covariance matrix of the (log)normal prior distribution
+  mean_shift: 0.2 # shifts the mean of the (log)normal prior distribution
+  prior_type: 'uniform' # 'lognormal', 'mvn' or 'uniform'
+
+  # Number of parameters to use for inference from the prior distribution.
+  # If number_of_params < number of parameters in the prior_data_file, they will be chosen randomly.
+  # Else, all parameters will be used.
   number_of_params: 5
+  infer_meal_params: True # If True, infer meal parameters. If False, infer only basal and CR parameters.
 
 sbi_settings:
-  algorithm: BayesFlow
-  sampling_method: 'sir'
-  num_simulations: 10
-  num_rounds: 1
-  n_samples_from_posterior: 10
+  algorithm: TSNPE # BayesFlow, TSNPE or APT
+  sampling_method: 'direct' # only used in ATP ['direct' | 'mcmc' | 'importance' | 'vi']
+  sample_proposal_with: 'sir' # only used in TSNPE ['rejection' | 'sir']
+  num_simulations: 1000 # Number of samples from a prior distribution to generate the training data
+  num_rounds: 5 # Rounds of sequential NPE. Only used in TSNPE or APT
+  n_samples_from_posterior: 100 # Number of samples from the posterior distribution
+
 
 simulate_posterior_hours: 24
