@@ -90,5 +90,3 @@ The process_results.py script is responsible for loading, processing, and visual
 - Generate visual comparisons of true and inferred glucose levels.
 
 - Compute and display mean squared error (MSE) between true and inferred simulations.
-
-

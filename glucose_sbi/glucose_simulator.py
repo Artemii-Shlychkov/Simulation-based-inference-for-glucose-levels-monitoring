@@ -143,7 +143,7 @@ def create_simulation_objects_with_custom_params(
     hours: int = 24,
     infer_meal_params: bool = False,
 ) -> list[SimObj]:
-    """Creates a list of simulation objecs with custom parameter values.
+    """Creates a list of simulation objects with custom parameter values.
     The parameters that are inferred (listed in InferredParams dataclass)
     are updated with the values from theta.
 
@@ -307,7 +307,7 @@ def generate_true_observation(
     Returns
     -------
     torch.Tensor:
-        Resulting glucose levels dynamincs
+        Resulting glucose levels dynamics
 
     """
     default_simulation_object.sim_time = timedelta(hours=hours)
