@@ -1,0 +1,227 @@
+[
+    {
+        "Parameter": "x0_10",
+        "Mean": 3.2,
+        "Std": 1.3
+    },
+    {
+        "Parameter": "x0_11",
+        "Mean": 73.0,
+        "Std": 30.0
+    },
+    {
+        "Parameter": "x0_12",
+        "Mean": 74.0,
+        "Std": 36.0
+    },
+    {
+        "Parameter": "x0_13",
+        "Mean": 262.0,
+        "Std": 30.0
+    },
+    {
+        "Parameter": "BW",
+        "Mean": 70.0,
+        "Std": 15.0
+    },
+    {
+        "Parameter": "EGPb",
+        "Mean": 2.0,
+        "Std": 0.5
+    },
+    {
+        "Parameter": "Gb",
+        "Mean": 110.0,
+        "Std": 10.0
+    },
+    {
+        "Parameter": "Ib",
+        "Mean": 10.0,
+        "Std": 5.0
+    },
+    {
+        "Parameter": "kabs",
+        "Mean": 0.04,
+        "Std": 0.015
+    },
+    {
+        "Parameter": "kmax",
+        "Mean": 0.075,
+        "Std": 0.02
+    },
+    {
+        "Parameter": "kmin",
+        "Mean": 0.02,
+        "Std": 0.005
+    },
+    {
+        "Parameter": "b",
+        "Mean": 1.5,
+        "Std": 0.75
+    },
+    {
+        "Parameter": "d",
+        "Mean": 1.5,
+        "Std": 0.75
+    },
+    {
+        "Parameter": "Vg",
+        "Mean": 12.0,
+        "Std": 3.0
+    },
+    {
+        "Parameter": "Vi",
+        "Mean": 15.0,
+        "Std": 5.0
+    },
+    {
+        "Parameter": "Ipb",
+        "Mean": 10.0,
+        "Std": 5.0
+    },
+    {
+        "Parameter": "Vmx",
+        "Mean": 500.0,
+        "Std": 150.0
+    },
+    {
+        "Parameter": "Km0",
+        "Mean": 200.0,
+        "Std": 50.0
+    },
+    {
+        "Parameter": "k2",
+        "Mean": 0.05,
+        "Std": 0.03
+    },
+    {
+        "Parameter": "k1",
+        "Mean": 0.05,
+        "Std": 0.03
+    },
+    {
+        "Parameter": "p2u",
+        "Mean": 0.045,
+        "Std": 0.015
+    },
+    {
+        "Parameter": "m1",
+        "Mean": 0.05,
+        "Std": 0.03
+    },
+    {
+        "Parameter": "m5",
+        "Mean": 0.05,
+        "Std": 0.03
+    },
+    {
+        "Parameter": "CL",
+        "Mean": 1.0,
+        "Std": 0.5
+    },
+    {
+        "Parameter": "HEb",
+        "Mean": 0.5,
+        "Std": 0.15
+    },
+    {
+        "Parameter": "m2",
+        "Mean": 0.05,
+        "Std": 0.03
+    },
+    {
+        "Parameter": "m4",
+        "Mean": 0.05,
+        "Std": 0.03
+    },
+    {
+        "Parameter": "m30",
+        "Mean": 1.0,
+        "Std": 0.5
+    },
+    {
+        "Parameter": "Ilb",
+        "Mean": 10.0,
+        "Std": 5.0
+    },
+    {
+        "Parameter": "ki",
+        "Mean": 0.02,
+        "Std": 0.005
+    },
+    {
+        "Parameter": "kp2",
+        "Mean": 0.02,
+        "Std": 0.005
+    },
+    {
+        "Parameter": "kp3",
+        "Mean": 0.02,
+        "Std": 0.005
+    },
+    {
+        "Parameter": "Gpb",
+        "Mean": 110.0,
+        "Std": 10.0
+    },
+    {
+        "Parameter": "Gtb",
+        "Mean": 90.0,
+        "Std": 10.0
+    },
+    {
+        "Parameter": "Vm0",
+        "Mean": 500.0,
+        "Std": 150.0
+    },
+    {
+        "Parameter": "Rdb",
+        "Mean": 2.0,
+        "Std": 0.5
+    },
+    {
+        "Parameter": "PCRb",
+        "Mean": 2.5,
+        "Std": 1.0
+    },
+    {
+        "Parameter": "kd",
+        "Mean": 0.03,
+        "Std": 0.01
+    },
+    {
+        "Parameter": "ksc",
+        "Mean": 0.03,
+        "Std": 0.01
+    },
+    {
+        "Parameter": "ka1",
+        "Mean": 0.035,
+        "Std": 0.015
+    },
+    {
+        "Parameter": "ka2",
+        "Mean": 0.035,
+        "Std": 0.015
+    },
+    {
+        "Parameter": "u2ss",
+        "Mean": 0.0,
+        "Std": 0.05
+    },
+    {
+        "Parameter": "isc1ss",
+        "Mean": 0.0,
+        "Std": 0.05
+    },
+    {
+        "Parameter": "isc2ss",
+        "Mean": 0.0,
+        "Std": 0.05
+    },
+    {
+        "Parameter": "kp1",
+        "Mean": 0.02,
+        "Std": 0.005
+    }
+]

@@ -1,4 +1,6 @@
 # Parameter Inference for Glucose Simulation: `glucose_sbi` package
+## Motivation
+The FDA-approved UVa/Padova Simulator provides a high-fidelity simulator for diabetes physiology, capturing a wide range of individual differences across patient parameters—such as insulin sensitivity, glucose absorption rates, and endogenous insulin production. By combining this simulator with the sbi-inference framework, one can estimate these physiological parameters directly from observational data (e.g., continuous glucose monitoring and meal/insulin logs). In practice, this approach enables tailoring model parameters to individual patients, giving clinicians or device manufacturers a personalized portrait of insulin–glucose dynamics. Consequently, using sbi-inference with the UVa/Padova Simulator paves the way toward more accurate, data-driven treatments and better outcomes for people with diabetes.
 ## Requirements
 
 ### Dependencies
@@ -13,8 +15,8 @@ torch.cuda.is_available()
 ```
 returns `True` in Python
 
-## Main module `infer_parameters`
-This module performs parameter inference using different Neural Posterior Estimation (NPE) techniques for glucose dynamics simulation. It utilizes the `sbi` package for Bayesian inference, `simglucose` for simulating glucose dynamics, and `matplotlib`, `numpy`, and `torch` for analysis and computation.
+## Brief description
+This tool performs parameter inference using different Neural Posterior Estimation (NPE) techniques for glucose dynamics simulation. It utilizes the `sbi` package for Bayesian inference, `simglucose` for simulating glucose dynamics, and `matplotlib`, `numpy`, and `torch` for analysis and computation.
 
 ## Features
 - Supports multiple inference algorithms: TSNPE, APT, and BayesFlow.
@@ -25,7 +27,7 @@ This module performs parameter inference using different Neural Posterior Estima
 
 ## Usage
 
-### Running the Script
+### Running the main script `infer_parameters`
 To run the parameter inference:
 ```bash
 python script.py --config <config_file> [--simulate_with_posterior] [--plot]
@@ -38,7 +40,7 @@ python script.py --config <config_file> [--simulate_with_posterior] [--plot]
 
 ### Example
 ```bash
-python script.py --config test_config.yaml --simulate_with_posterior --plot
+python -m glucose_sbi.infer_parameters --config test_config.yaml --simulate_with_posterior --plot
 ```
 
 ## Configuration
@@ -48,16 +50,22 @@ Refer to a `test_config.yaml` for an example
 
 ## Output
 The script generates the following outputs:
-- `results/<timestamp>/posterior_distribution.pkl`: Pickle file containing the inferred posterior distribution.
-- `results/<timestamp>/posterior_samples.pkl`: Pickle file containing sampled posterior parameter values.
-- `results/<timestamp>/glucose_dynamics.pkl`: Simulated glucose dynamics from the inferred posterior.
+- `results/<timestamp>/posterior_distribution.pt`: Torch file containing the inferred posterior distribution.
+- `results/<timestamp>/posterior_samples.pt`: Torch file containing sampled posterior parameter values.
+- `results/<timestamp>/glucose_dynamics.pt`: Simulated glucose dynamics from the inferred posterior.
 - `results/<timestamp>/simulation_results.png`: Plot comparing true and inferred glucose dynamics (if `--plot` is enabled).
-- `results/<timestamp>/simulation_config.yaml`: YAML file storing metadata of the inference session.
+- `results/<timestamp>/simulation_config.yaml`: YAML file storing the initial config and some metadata of the inference session.
 
 ## Logging
 The script logs all operations in `results/<timestamp>/inference_execution.log`.
 
-# Module `prepare_priors`
+### Module `sbi_framework`
+This module contains the necessary functions to run the simulation based inference, based on the `sbi` package:
+- Prepare and check the sbi-simulator
+- Run different methods of inference (BayesFlow, APT, TSNPE)
+- Sample from the resulting posterior distribution
+
+### Module `prepare_priors`
 
 The prepare_priors.py script is responsible for constructing and managing prior distributions for parameter inference, based on some domain knowledge like the range of parameter values or their mean / std.
 Available data to date is extracted from the simglucose "patients" and stored in the `all_sg_patients_params_values.json`. Based on this data, the module provides functions to:
@@ -68,7 +76,10 @@ Available data to date is extracted from the simglucose "patients" and stored in
 
 - Apply transformations such as covariance inflation and mean shifting to enhance parameter variability.
 
-# Module `process_results`
+### Module `glucose_simulator`
+This module contains logic to run simglucose simulations with given sets of patient parameters (theta), different from default ones.
+
+### Module `process_results`
 
 The process_results.py script is responsible for loading, processing, and visualizing the inference results. It provides functions to:
 
@@ -79,6 +90,3 @@ The process_results.py script is responsible for loading, processing, and visual
 - Generate visual comparisons of true and inferred glucose levels.
 
 - Compute and display mean squared error (MSE) between true and inferred simulations.
-
-# Module `glucose_simulator`
-This module contains logic to run simglucose simulations with given sets of patient parameters (theta), different from default ones.

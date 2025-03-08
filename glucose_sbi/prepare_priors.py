@@ -8,41 +8,66 @@ import numpy as np
 import torch
 from sbi.utils import BoxUniform
 from torch.distributions import (
-    Distribution,
     ExpTransform,
     MultivariateNormal,
     TransformedDistribution,
     Uniform,
 )
 
-logger = logging.getLogger("sbi_logger")
+logger = logging.getLogger("glucose_sbi.prepare_priors")
 
 
 @dataclass
 class InferredParams:
+    """Dataclass containing the names of the inferred parameters."""
+
     params_names: list[str]
 
 
 @dataclass
 class Prior(InferredParams):
+    """Dataclass containing the prior distribution of the inferred parameters and its type."""
+
     type: str
-    params_prior_distribution: (
-        Distribution | BoxUniform | MultivariateNormal | TransformedDistribution
-    )
+    params_prior_distribution: BoxUniform | MultivariateNormal | TransformedDistribution
 
 
-def select_random_params(n_params: int, list_of_params: list[str]) -> list[str]:
-    return random.sample(list_of_params, n_params)
+def _select_random_keys(n_keys: int, d: dict) -> list[str]:
+    """Selects a random subset of keys from the dictionary."""
+    return random.sample(sorted(d), n_keys)
+
+
+def _select_random_dict_subset(n_params: int, d: dict) -> dict:
+    """Selects a random subset of key-value pairs from a dictionary."""
+    return {k: d[k] for k in _select_random_keys(n_keys=n_params, d=d)}
+
+
+def _generate_from_uniform(n_samples: int, low: int, high: int) -> np.ndarray:
+    """Generates random numbers from a uniform distribution."""
+    rng = np.random.default_rng()
+    return rng.integers(low=low, high=high, size=n_samples)
+
+
+def _include_meal_params(data: dict, n_observations: int) -> dict:
+    """Adds meal parameters to the data dictionary."""
+    meal_dict = {
+        f"meal_{time}": _generate_from_uniform(n_observations, 1, 100)
+        for time in [7, 12, 16, 18, 23]
+    }
+    data.update(meal_dict)
+    return data
 
 
 def construct_mvn_prior(
-    device: torch.device,
     data: dict,
+    *,
+    device: torch.device,
     cov_inflation_factor: float = 1.0,
     mean_shift_scale: float = 0.0,
     numerical_stability_factor: float = 1e-4,
 ) -> MultivariateNormal:
-    """Given some observed values for patient parameters, constructs a multivariate normal distribution, then optionally distorts it to avoid overfitting/bias:
+    """Given some observed values for patient parameters, constructs a multivariate normal distribution,
+    then optionally distorts it to avoid overfitting/bias:
     - inflates the covariance by `cov_inflation_factor`,
     - shifts the mean stochastically by `mean_shift_scale * abs(mean)`.
 
@@ -51,14 +76,14 @@ def construct_mvn_prior(
     data : dict
         patient parameters. The data is expected to have structure: {param_name: [val_patient1, val_patient2, ...], ...}
     device : torch.device
-        Device on which to place the resulting distribution's tensors.
+        Device on which to place the resulting distribution's tensors: ["cuda" | "cpu"]
     cov_inflation_factor : float, default=1.0
         Factor by which to multiply the covariance matrix. (1.0 => no inflation)
     mean_shift_scale : float, default=0.0
-        If not None, we sample a random shift for each dimension:
+        If > 0, we sample a random shift for each dimension:
             shift_i ~ Normal(0, mean_shift_scale * abs(mean_i))
         Then add it to the empirical mean.
-        If None, no random shift is applied.
+        If 0, no random shift is applied.
     numerical_stability_factor : float, default=1e-4
         Minimum inflation added to the diagonal to prevent singular covariance.
 
@@ -69,24 +94,25 @@ def construct_mvn_prior(
 
     """
     logger.info("Constructing MVN prior...")
-    # --- 1) Compute empirical mean and covariance. ---
+
     data_array = np.array([data[key] for key in data])
 
-    mean_emp = np.mean(data_array, axis=1)  # shape (n_params,)
-    cov_emp = np.cov(data_array)  # shape (n_params, n_params)
+    mean_emp = np.mean(data_array, axis=1)
+    cov_emp = np.cov(data_array)
 
-    # --- 2) Inflate the covariance. ---
     if cov_inflation_factor < 1.0:
         logger.warning("Warning: cov_inflation_factor < 1.0 => shrinking cov?")
-    # Add a small diagonal for numerical stability & scale overall
+
     cov_inflated = cov_emp * cov_inflation_factor
     cov_inflated += np.eye(cov_inflated.shape[0]) * numerical_stability_factor
 
-    # --- 3) Optionally shift the mean stochastically. ---
     mean_emp_t = torch.tensor(mean_emp, dtype=torch.float32, device=device)
     cov_inflated_t = torch.tensor(cov_inflated, dtype=torch.float32, device=device)
 
     if mean_shift_scale > 0:
+        crit_mean_shift = 0.5
+        if mean_shift_scale > crit_mean_shift:
+            logger.warning("Warning: mean_shift_scale > 0.5 => too large shifts?")
         gen = torch.Generator(device=device)
 
         stddev_vec = mean_emp_t.abs() * mean_shift_scale
@@ -96,13 +122,13 @@ def construct_mvn_prior(
     else:
         mean_final_t = mean_emp_t
 
-    # --- 4) Build the MVN distribution. ---
     return MultivariateNormal(loc=mean_final_t, covariance_matrix=cov_inflated_t)
 
 
 def construct_lognormal_prior(
-    device: torch.device,
     data: dict,
+    *,
+    device: torch.device,
     cov_inflation_factor: float = 1.0,
     mean_shift_scale: float = 0.0,
     numerical_stability_factor: float = 1e-4,
@@ -123,7 +149,7 @@ def construct_lognormal_prior(
           {param_name: [val_patient1, val_patient2, ...], ...}
         *All values must be > 0* (strictly positive).
     device : torch.device
-        Device on which to place the resulting distribution's tensors.
+        Device on which to place the resulting distribution's tensors: ["cuda" | "cpu"]
     cov_inflation_factor : float, default=1.0
         Factor by which to multiply the covariance matrix in log-space. (1.0 => no inflation)
     mean_shift_scale : float, default=0.0
@@ -142,64 +168,56 @@ def construct_lognormal_prior(
 
     """
     logger.info("Constructing lognormal prior...")
-    # 1) Convert data dict to array shape (n_params, n_samples).
+
     data_array = np.array([data[key] for key in data])
 
-    # Ensure data > 0. (If any zero or negative, either raise an error or fix them.)
     if not np.all(data_array > 0):
         m = "All data values must be strictly > 0 for log transform."
         raise ValueError(m)
 
-    # 2) Move to log-space: shape still (n_params, n_samples).
     log_data = np.log(data_array)
 
-    # 3) Compute empirical mean & cov in log-space.
-    mean_emp_log = np.mean(log_data, axis=1)  # shape (n_params,)
-    cov_emp_log = np.cov(log_data)  # shape (n_params, n_params)
+    mean_emp_log = np.mean(log_data, axis=1)
+    cov_emp_log = np.cov(log_data)
 
-    # 4) Inflate the covariance in log-space.
     if cov_inflation_factor < 1.0:
         logger.warning("Warning: cov_inflation_factor < 1.0 => shrinking cov?")
 
     cov_inflated = cov_emp_log * cov_inflation_factor
 
-    # Add small diagonal for numerical stability.
     cov_inflated += np.eye(cov_inflated.shape[0]) * numerical_stability_factor
 
-    # 5) Convert to torch tensors.
     mean_log_t = torch.tensor(mean_emp_log, dtype=torch.float32, device=device)
     cov_log_t = torch.tensor(cov_inflated, dtype=torch.float32, device=device)
 
-    # 6) Optionally shift the log-mean stochastically.
     if mean_shift_scale > 0:
-        if mean_shift_scale > 1.0:
-            logger.warning("Warning: mean_shift_scale > 1.0 => too large shifts?")
+        crit_mean_shift = 0.5
+        if mean_shift_scale > crit_mean_shift:
+            logger.warning("Warning: mean_shift_scale > 0.5 => too large shifts?")
         gen = torch.Generator(device=device)
         stddev_vec = mean_log_t.abs() * mean_shift_scale
         shift_vec = torch.normal(mean=0.0, std=stddev_vec, generator=gen)
         mean_log_t = mean_log_t + shift_vec
 
-    # 7) Build the base MVN in log-space.
     base_mvn = MultivariateNormal(loc=mean_log_t, covariance_matrix=cov_log_t)
 
-    # 8) Wrap with ExpTransform => final distribution in real (positive) space.
-    #    log_prob automatically accounts for log|Jacobian| if you use .log_prob in real space.
     return TransformedDistribution(base_mvn, ExpTransform())
 
 
 def construct_box_uniform_prior(
-    data: dict, device: torch.device, inflation_factor: float = 1.0
+    data: dict, *, device: torch.device, inflation_factor: float = 1.0
 ) -> Uniform:
     """Given some observed values for patient parameters, constructs a multivariate uniform distribution, then optionally expands the range by `inflation_factor`.
 
     Parameters
     ----------
     data : dict
-        patient parameters. The data is expected to have structure: {param_name: [val_patient1, val_patient2, ...], ...} or {param_name: [max_val, min_val], ...}
-    inflation_factor : float
-        amount to inflate the parameter range by. By default, no inflation is applied.
+        Patient parameters. The data is expected to have structure: {param_name: [val_patient1, val_patient2, ...], ...} or {param_name: [max_val, min_val], ...}
     device : torch.device
-        device to store the tensors on.
+        Device on which to place the resulting distribution's tensors: ["cuda" | "cpu"]
+    inflation_factor : float
+        Amount to inflate the parameter range by. By default, no inflation is applied.
+
 
     Returns
     -------
@@ -227,11 +245,11 @@ def construct_box_uniform_prior(
     )
 
 
-def mvn_from_domain_knowledge(
+def mvn_from_mean_std(
     data: dict,
 ) -> MultivariateNormal:
-    """Creates a prior distribution from a .csv file containing the mean and \
-        standard deviation of the parameters.
+    """Creates a prior distribution from a data file containing the mean and
+    standard deviation of the parameters.
 
     Parameters
     ----------
@@ -262,6 +280,8 @@ def prepare_prior(
     number_of_params: int,
     inflation_factor: float,
     mean_shift: float,
+    *,
+    infer_meal_params: bool = False,
     device: torch.device,
 ) -> Prior:
     """Creates a prior distribution from the known parameters of the simglucose patients.
@@ -285,13 +305,15 @@ def prepare_prior(
         amount to shift the mean vector by. Only used for the mvn prior.
     device : torch.device
         device to store the tensors on.
+    infer_meal_params : bool, optional
+        If True, the meal parameters are inferred as well, by default False
 
     Returns
     -------
     Prior
         A dataclass holding:
-            - type='mvn' or 'BoxUniform'
-            - params_names: the list of parameter names in `data_file`
+            - type of the distribution
+            - params_names: the list of parameter names which will be inferred
             - params_prior_distribution: the resulting prior distribution
 
     Raises
@@ -306,50 +328,65 @@ def prepare_prior(
     list_of_params = list(all_patients_params.keys())
 
     if number_of_params < len(list_of_params):
-        selected_params = select_random_params(number_of_params, list_of_params)
-    else:
-        selected_params = list_of_params
-    selected_data = {k: all_patients_params[k] for k in selected_params}
+        selected_data = _select_random_dict_subset(
+            number_of_params, all_patients_params
+        )
 
-    if prior_type == "mvn":
-        return Prior(
-            type="mvn",
-            params_names=selected_params,
-            params_prior_distribution=construct_mvn_prior(
-                data=selected_data,
-                device=device,
-                cov_inflation_factor=inflation_factor,
-                mean_shift_scale=mean_shift,
-            ),
-        )
-    if prior_type == "uniform":
-        return Prior(
-            type="uniform",
-            params_names=selected_params,
-            params_prior_distribution=construct_box_uniform_prior(
-                data=selected_data,
-                inflation_factor=inflation_factor,
-                device=device,
-            ),
-        )
-    if prior_type == "lognormal":
-        return Prior(
-            type="lognormal",
-            params_names=selected_params,
-            params_prior_distribution=construct_lognormal_prior(
-                data=selected_data,
-                device=device,
-                cov_inflation_factor=inflation_factor,
-                mean_shift_scale=mean_shift,
-            ),
-        )
-    if prior_type == "mvn_domain_knowledge":
-        return Prior(
-            type="mvn_domain_knowledge",
-            params_names=selected_params,
-            params_prior_distribution=mvn_from_domain_knowledge(
-                data=selected_data,
-            ),
-        )
+    else:
+        selected_data = all_patients_params
+    n_observations = len(next(iter(selected_data.values()))) if selected_data else 10
+
+    if infer_meal_params:
+        selected_data = _include_meal_params(selected_data, n_observations)
+
+    selected_params = list(selected_data.keys())
+
+    if len(selected_params) == 0:
+        msg = "No parameters were selected."
+        logger.error(msg)
+        raise ValueError(msg)
+
+    match prior_type:
+        case "mvn":
+            return Prior(
+                type="mvn",
+                params_names=selected_params,
+                params_prior_distribution=construct_mvn_prior(
+                    data=selected_data,
+                    device=device,
+                    cov_inflation_factor=inflation_factor,
+                    mean_shift_scale=mean_shift,
+                ),
+            )
+        case "uniform":
+            return Prior(
+                type="uniform",
+                params_names=selected_params,
+                params_prior_distribution=construct_box_uniform_prior(
+                    data=selected_data,
+                    inflation_factor=inflation_factor,
+                    device=device,
+                ),
+            )
+        case "lognormal":
+            return Prior(
+                type="lognormal",
+                params_names=selected_params,
+                params_prior_distribution=construct_lognormal_prior(
+                    data=selected_data,
+                    device=device,
+                    cov_inflation_factor=inflation_factor,
+                    mean_shift_scale=mean_shift,
+                ),
+            )
+        case "mvn_from_mean_std":
+            return Prior(
+                type="mvn_from_mean_std",
+                params_names=selected_params,
+                params_prior_distribution=mvn_from_mean_std(
+                    data=selected_data,
+                ),
+            )
+
     msg = "Invalid prior type or not implemented yet."
     raise ValueError(msg)

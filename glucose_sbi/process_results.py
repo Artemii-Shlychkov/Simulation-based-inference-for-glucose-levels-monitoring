@@ -11,13 +11,17 @@ import yaml
 from matplotlib import ticker
 from sbi.inference import DirectPosterior
 
-from glucose_sbi.glucose_simulator import DeafultSimulationEnv, run_glucose_simulator
+from glucose_sbi.glucose_simulator import (
+    EnvironmentSettings,
+    create_simulation_object,
+    run_glucose_simulator,
+)
 from glucose_sbi.prepare_priors import InferredParams, Prior
 
 
 @dataclass
 class Results:
-    default_settings: DeafultSimulationEnv
+    default_settings: EnvironmentSettings
     inferred_params: InferredParams
     true_observation: torch.Tensor
     true_params: dict
@@ -74,7 +78,7 @@ def load_results(
         results_folder / "Experimental Setup" / "default_settings.json"
     ).open() as f:
         defaut_sim_env_dict = json.load(f)
-    defaut_sim_env = DeafultSimulationEnv(**defaut_sim_env_dict)
+    defaut_sim_env = EnvironmentSettings(**defaut_sim_env_dict)
 
     with Path(results_folder / "simulation_config.yaml").open() as f:
         sim_config = yaml.safe_load(f)
@@ -138,16 +142,18 @@ def simulate_true_and_inferred(
     theta_true = torch.tensor(
         [value for _, value in true_parameters.items()]
     ).unsqueeze(0)
+    default_simulation_object = create_simulation_object(default_settings)
     sim_true = run_glucose_simulator(
         theta=theta_true,
-        default_settings=default_settings,
+        default_simulation_object=default_simulation_object,
         inferred_params=results.inferred_params,
         device=device,
         hours=hours,
     )
+
     sim_inferred = run_glucose_simulator(
         theta=posterior_samples,
-        default_settings=default_settings,
+        default_simulation_object=default_simulation_object,
         inferred_params=results.inferred_params,
         device=device,
         hours=hours,
@@ -250,6 +256,52 @@ def plot_simulation(
             f"{config['patient_name']} - {n_params} inferred parameters\n{sbi_settings['algorithm']} - {sbi_settings['num_rounds']} round(s) - {sbi_settings['num_simulations']} simulations"
         )
     sns.despine()
+    plt.tight_layout()
+    return fig, ax
+
+
+def plot_meals(
+    true_scenario: list[tuple[int, int]], inferred_scenario: np.ndarray
+) -> tuple[plt.Figure, plt.Axes]:
+    """Plot the inferred vs true meal sizes.
+
+    Parameters
+    ----------
+    true_scenario : list[tuple[int, int]]
+        The true meal sizes
+    inferred_scenario : np.ndarray
+        The inferred meal sizes
+
+    Returns
+    -------
+    tuple[plt.Figure, plt.Axes]
+        The figure and axes objects
+
+    """
+    fig, ax = plt.subplots(figsize=(10, 6))
+    meal_times = [meal[0] for meal in true_scenario]
+    ax.scatter(*zip(*true_scenario), color="green", label="True meal size")
+
+    ax.errorbar(
+        meal_times,
+        inferred_scenario.mean(axis=0),
+        yerr=inferred_scenario.std(axis=0),
+        fmt="o",
+        color="red",
+        capsize=5,
+        label="Inferred meal size",
+    )
+
+    ax.legend()
+
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Meal size")
+    ax.set_xlim(0, 24)
+    ax.set_xticks(np.arange(0, 25, 2))
+    ax.set_xticks(np.arange(0, 25, 1), minor=True)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    plt.title("Inferred vs True meal sizes")
     plt.tight_layout()
     return fig, ax
 
