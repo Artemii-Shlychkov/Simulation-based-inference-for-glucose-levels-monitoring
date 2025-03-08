@@ -122,7 +122,9 @@ def set_up_device() -> torch.device:
     return device
 
 
-def set_up_default_simulation_object(config: dict) -> SimObj:
+def set_up_default_simulation_object(
+    config: dict,
+) -> tuple[EnvironmentSettings, SimObj]:
     """Set up the default simulation object for the simulation based on specifications
     in the configuration file. The simulation object has default presets like meal scenario and
     patient parameters, ready to `.simulate`.
@@ -134,7 +136,8 @@ def set_up_default_simulation_object(config: dict) -> SimObj:
 
     Returns
     -------
-    SimObj
+    tuple[EnvironmentSettings, SimObj]
+        The EnvironmentSettings object with the default settings for the simulation.
         The resulting simulation object with all the necessary presets and ready to `.simulate`
 
     """
@@ -146,7 +149,8 @@ def set_up_default_simulation_object(config: dict) -> SimObj:
         scenario=scenario,
         hours=config["hours"],
     )
-    return create_simulation_object(default_settings)
+    default_simulation_object = create_simulation_object(default_settings)
+    return default_settings, default_simulation_object
 
 
 def set_up_prior(config: dict) -> Prior:
@@ -342,7 +346,9 @@ if __name__ == "__main__":
     check_config(config_file=Path(script_dir / "simulation_configs" / args.config))
 
     device = set_up_device()
-    default_simulation_object = set_up_default_simulation_object(config)
+    default_settings, default_simulation_object = set_up_default_simulation_object(
+        config
+    )
     prior = set_up_prior(config)
 
     true_observation = generate_true_observation(
@@ -356,7 +362,7 @@ if __name__ == "__main__":
     save_experimental_setup(
         save_path=save_path,
         prior=prior,
-        default_settings=default_simulation_object.env.settings,
+        default_settings=default_settings,
         true_observation=true_observation,
         true_params=true_params,
     )
