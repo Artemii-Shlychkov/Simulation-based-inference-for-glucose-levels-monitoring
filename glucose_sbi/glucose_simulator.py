@@ -20,10 +20,12 @@ from glucose_sbi.prepare_priors import InferredParams
 
 pathos = True
 
+logger = logging.getLogger("sbi_logger.glucose_simulator")
+
 
 @dataclass
-class DeafultSimulationEnv:
-    """Dataclass for the default simulation environment."""
+class EnvironmentSettings:
+    """Dataclass to store the initial presets of the simulation environment."""
 
     patient_name: str
     sensor_name: str
@@ -34,28 +36,28 @@ class DeafultSimulationEnv:
 
 def run_glucose_simulator(
     theta: torch.Tensor,
-    default_settings: DeafultSimulationEnv,
+    default_simulation_object: SimObj,
     inferred_params: InferredParams,
-    hours: int = 24,
     *,
+    hours: int = 24,
     device: torch.device,
     infer_meal_params: bool = False,
-    logger: logging.Logger | None = None,
 ) -> torch.Tensor:
-    """Run the glucose simulator for a batch of custom parameters.
+    """For every set of custom parameter values in theta, creates a modified corresponding simulation object with these parameters
+    and runs the simulation for all of them in batch.
 
     Parameters
     ----------
     theta : torch.Tensor
         Sets of custom parameters to use for the simulation of shape (N_sets, N_params)
-    default_settings : DeafultSimulationEnv
-        DataClass object containing the default simulation environment settings.
+    default_simulation_object : SimObj
+        The simulation object with all default presets like meal scenario and patient parameters, ready to `.simulate`
     inferred_params : InferredParams
-        DataClass object containing the names of inferred parameters
+        Dataclass object containing the names of inferred parameters
     hours : int, optional
         Duration of the simulation, by default 24
-    device : torch.device, optional
-        Device used to store the results, by default torch.device("cpu")
+    device : torch.device
+        Device used to store the results
     logger : logging.Logger, optional
         The logger object, by default None
     infer_meal_params : bool, optional
@@ -67,135 +69,133 @@ def run_glucose_simulator(
         The glucose dynamics time series for each simulation
 
     """
-    if logger:
-        logger.info("Running the glucose simulator on theta of shape, %s", theta.shape)
-    simulation_envs = create_simulation_envs_with_custom_params(
+    logger.info("Running the glucose simulator on theta of shape, %s", theta.shape)
+    simulation_envs = create_simulation_objects_with_custom_params(
         theta=theta,
-        default_settings=default_settings,
+        default_simulation_object=default_simulation_object,
         inferred_params=inferred_params,
-        infer_meal_params=infer_meal_params,
         hours=hours,
+        infer_meal_params=infer_meal_params,
     )
-    return simulate_batch(simulation_envs, device, logger)
+    return simulate_batch(simulation_envs, device=device)
 
 
 def simulate_batch(
-    simulations: list[T1DSimEnv],
+    simulations: list[SimObj],
+    *,
     device: torch.device,
-    logger: logging.Logger | None = None,
 ) -> torch.Tensor:
-    """Simulate a batch of simulation environments in parallel.
+    """Simulates a batch of simulation objects in parallel.
 
     Parameters
     ----------
-    simulations : list[T1DSimEnv]
-        List of simulation environments
+    simulations : list[SimObj]
+        List of simulation objects with all the necessary presets and ready to `.simulate`
     device : torch.device
-        The device to store the results on, by default torch.device("cpu")
+        The device to store the results on
     logger : logging.Logger, optional
         The logger object, by default None
 
     Returns
     -------
     torch.Tensor
-        The glucose dynamics for each simulation
+        The tensor storing the resulting glucose dynamics for each simulation
 
     """
     pathos = True
     tic = time.time()
     if pathos:
-        if logger:
-            logger.info("Using pathos for parallel processing")
+        logger.info("Using pathos for parallel processing")
         with Pool() as p:
             results = p.map(simulate_glucose_dynamics, simulations)
     else:
         results = [simulate_glucose_dynamics(s) for s in tqdm(simulations)]
     results = np.stack(results)
     toc = time.time()
-    if logger:
-        # log in seconds
-        logger.info("Simulation took %s seconds", toc - tic)
+
+    logger.info("Simulation took %s seconds", toc - tic)
     return torch.from_numpy(results).float().to(device)
 
 
-def simulate_glucose_dynamics(simulation_env: T1DSimEnv) -> np.ndarray:
-    """Simulates the glucose dynamics for a given simulation environment.
+def simulate_glucose_dynamics(simulation_env: SimObj) -> np.ndarray:
+    """Simulates the glucose dynamics for one given simulation object.
 
     Parameters
     ----------
-    simulation_env : T1DSimEnv
-        The simulation environment object
+    simulation_env : SimObj
+        The simulation object with all the necessary presets and ready to `.simulate`
 
     Returns
     -------
     np.ndarray
-        The glucose dynamics
+        Resulting glucose dynamics
 
     """
     simulation_env.simulate()
     return simulation_env.results()["CGM"].to_numpy()
 
 
-def create_simulation_envs_with_custom_params(
+def create_simulation_objects_with_custom_params(
     theta: torch.Tensor,
-    default_settings: DeafultSimulationEnv,
+    default_simulation_object: SimObj,
     inferred_params: InferredParams,
-    hours: int = 24,
     *,
+    hours: int = 24,
     infer_meal_params: bool = False,
-) -> list[T1DSimEnv]:
-    """Creates a list of simulation environments with custom parameters.
+) -> list[SimObj]:
+    """Creates a list of simulation objecs with custom parameter values.
+    The parameters that are inferred (listed in InferredParams dataclass)
+    are updated with the values from theta.
 
     Parameters
     ----------
     theta : torch.Tensor
-        Sets of custom parameters to use for the simulation of shape (N_sets, N_params)
-    default_settings : DeafultSimulationEnv
-        DataClass object containing the default simulation environment settings.
+        A tensor of custom parameter values of shape (N_simulations, N_params) to be used for simulations.
+    default_simulation_object : SimObj
+        The simulation object with all default presets like meal scenario and patient parameters, ready to `.simulate`
     inferred_params : InferredParams
-        DataClass object containing the names of inferred parameters
+        Dataclass object containing the names of inferred parameters
     hours : int, optional
-        Duration of simulation, by default 24
+        Duration of each simulation, by default 24
     infer_meal_params : bool, optional
         Whether to infer meal parameters, by default False
 
     Returns
     -------
-    list[T1DSimEnv]
-        List of simulation environments with custom parameters
+    list[SimObj]
+        List of simulation objects with adjusted parameter values
 
     """
-    default_simulation_env = load_default_simulation_env(
-        hours=hours, env_settings=default_settings
-    )
-    simulation_envs = []
-    for _, theta_i in enumerate(theta):
-        custom_sim_env = deepcopy(default_simulation_env)
+    simulation_objects = []
 
+    for _, theta_i in enumerate(theta):
+        custom_sim_obj = deepcopy(default_simulation_object)
+        custom_sim_obj.sim_time = timedelta(hours=hours)
         set_custom_params(
-            custom_sim_env,
+            custom_sim_obj,
             theta_i,
             inferred_params,
             infer_meal_params=infer_meal_params,
         )
-        simulation_envs.append(custom_sim_env)
+        simulation_objects.append(custom_sim_obj)
 
-    return simulation_envs
+    return simulation_objects
 
 
 def set_custom_params(
-    default_simulation_env: T1DSimEnv,
+    default_simulation_obj: SimObj,
     theta: torch.Tensor,
     inferred_params: InferredParams,
     *,
     infer_meal_params: bool = False,
 ) -> None:
-    """Apply the custom parameters (used for a particular simulation) for the patient.
+    """Change the default parameters of the patient and scenario in the simulation object
+    for a given set of corresponding custom parameters (these are inferred).
 
     Parameters
     ----------
-    default_simulation_env : DefaultSimulationEnv
-        The simulation environment containing the patient and scenario.
+    default_simulation_obj : SimObj
+        The simulation object containing the patient parameters and the meal scenario.
     theta : torch.Tensor
         One set of custom parameters to apply to the patient.
     inferred_params : InferredParams
@@ -206,7 +206,7 @@ def set_custom_params(
     """
     theta_list = theta.clone().tolist()
     param_names = inferred_params.params_names
-    patient = default_simulation_env.env.patient
+    patient = default_simulation_obj.env.patient
 
     # Separate meal and non-meal parameters
     meal_indices, meal_values, other_params, other_values = _separate_parameters(
@@ -216,7 +216,7 @@ def set_custom_params(
     if infer_meal_params and meal_indices:
         # Update meal parameters in the scenario
         _update_meal_parameters(
-            default_simulation_env.env.scenario.scenario, meal_values
+            default_simulation_obj.env.scenario.scenario, meal_values
         )
 
     # Update other parameters in the patient
@@ -255,22 +255,23 @@ def _update_patient_parameters(
         setattr(patient._params, param, value)  # noqa: SLF001
 
 
-def load_default_simulation_env(
-    env_settings: DeafultSimulationEnv, hours: int = 24
-) -> T1DSimEnv:
-    """Load the default simulation environment.
+def create_simulation_object(
+    env_settings: EnvironmentSettings, hours: int = 24
+) -> SimObj:
+    """Creates the simulation object based on a patient, sensor, pump and scenario, specified in
+    environment settings.
 
     Parameters
     ----------
-    env_settings : DeafultSimulationEnv
-        DataClass object containing the default simulation environment settings.
+    env_settings : EnvironmentSettings
+        Dataclass object containing the basic simulation environment settings.
     hours : int, optional
         The number of hours to simulate, by default 24
 
     Returns
     -------
-    T1DSimEnv
-        The simulation environment object.
+    SimObj
+        The resulting simulation object with all the necessary presets and ready to `.simulate`
 
     """
     now = datetime.now(tz=timezone.utc)
@@ -286,3 +287,30 @@ def load_default_simulation_env(
     return SimObj(
         env=env, controller=controller, sim_time=timedelta(hours=hours), animate=False
     )
+
+
+def generate_true_observation(
+    default_simulation_object: SimObj, *, device: torch.device, hours: int = 24
+) -> torch.Tensor:
+    """Simulates glucose dynamics for default simulation environment settings
+    and returns the single simulated glucose dynamics.
+
+    Parameters
+    ----------
+    default_simulation_object : SimObj
+        The simulation object with all default presets like meal scenario and patient parameters, ready to `.simulate`
+    device : torch.device
+        Device to save the simulation results on.
+    hours : int, optional
+        Duration of the simulation, by default 24
+
+    Returns
+    -------
+    torch.Tensor:
+        Resulting glucose levels dynamincs
+
+    """
+    default_simulation_object.sim_time = timedelta(hours=hours)
+    default_simulation_object.simulate()
+    true_observation = default_simulation_object.results()["CGM"].to_numpy()
+    return torch.from_numpy(true_observation).float().to(device)

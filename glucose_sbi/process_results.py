@@ -11,13 +11,17 @@ import yaml
 from matplotlib import ticker
 from sbi.inference import DirectPosterior
 
-from glucose_sbi.glucose_simulator import DeafultSimulationEnv, run_glucose_simulator
+from glucose_sbi.glucose_simulator import (
+    EnvironmentSettings,
+    create_simulation_object,
+    run_glucose_simulator,
+)
 from glucose_sbi.prepare_priors import InferredParams, Prior
 
 
 @dataclass
 class Results:
-    default_settings: DeafultSimulationEnv
+    default_settings: EnvironmentSettings
     inferred_params: InferredParams
     true_observation: torch.Tensor
     true_params: dict
@@ -74,7 +78,7 @@ def load_results(
         results_folder / "Experimental Setup" / "default_settings.json"
     ).open() as f:
         defaut_sim_env_dict = json.load(f)
-    defaut_sim_env = DeafultSimulationEnv(**defaut_sim_env_dict)
+    defaut_sim_env = EnvironmentSettings(**defaut_sim_env_dict)
 
     with Path(results_folder / "simulation_config.yaml").open() as f:
         sim_config = yaml.safe_load(f)
@@ -138,16 +142,18 @@ def simulate_true_and_inferred(
     theta_true = torch.tensor(
         [value for _, value in true_parameters.items()]
     ).unsqueeze(0)
+    default_simulation_object = create_simulation_object(default_settings)
     sim_true = run_glucose_simulator(
         theta=theta_true,
-        default_settings=default_settings,
+        default_simulation_object=default_simulation_object,
         inferred_params=results.inferred_params,
         device=device,
         hours=hours,
     )
+
     sim_inferred = run_glucose_simulator(
         theta=posterior_samples,
-        default_settings=default_settings,
+        default_simulation_object=default_simulation_object,
         inferred_params=results.inferred_params,
         device=device,
         hours=hours,
