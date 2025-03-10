@@ -30,7 +30,7 @@ This tool performs parameter inference using different Neural Posterior Estimati
 ### Running the main script `infer_parameters`
 To run the parameter inference:
 ```bash
-python script.py --config <config_file> [--simulate_with_posterior] [--plot]
+python -m glucose_sbi.infer_parameters --config <config_file> [--simulate_with_posterior] [--plot]
 ```
 
 ### Arguments
